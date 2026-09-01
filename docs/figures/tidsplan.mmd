@@ -1,0 +1,54 @@
+---
+config:
+  gantt:
+    fontSize: 18
+    sectionFontSize: 20
+    barHeight: 30
+    barGap: 8
+    leftPadding: 140
+    gridLineStartPadding: 40
+---
+gantt
+    title Estimeret tidsplan, Spektra
+    dateFormat YYYY-MM-DD
+    axisFormat %d/%m
+    todayMarker off
+
+    section Fase 0
+    Case, problemformulering og kravspecifikation (P1, P2)   :f0a, 2026-08-31, 2d
+    Hardware og teknologivalg (P3, P4)                       :f0b, 2026-08-31, 2d
+
+    section Fase 1
+    Protokolskema version 1 (K1.1)                           :f1a, 2026-09-02, 2d
+    Dataindtag og selvregistrering (K1.2, K4.1)              :f1b, 2026-09-02, 3d
+    Databaseskema og migrationer (P5)                        :f1c, 2026-09-03, 2d
+    Emulator til simuleret flåde (P6)                       :f1d, 2026-09-04, 1d
+    Byggeautomatik og idriftsættelse (P7, P8)               :f1e, 2026-09-05, 3d
+
+    section Fase 2
+    Signalbehandlingskæde (K2.1 til K2.4)                   :f2a, 2026-09-08, 4d
+    Aggregering og eftersendelse (K3.1, K3.2)                :f2b, 2026-09-10, 2d
+    Tidsserielagring og fortætning (K4.2, K4.3)             :f2c, 2026-09-11, 2d
+    Fysisk node (P9)                                         :f2d, 2026-09-12, 3d
+
+    section Fase 3
+    Baseline og detektor (K5)                                :f3a, 2026-09-15, 2d
+    Alarm, udsendelse og underretning (K6.1 til K6.4)        :f3b, 2026-09-16, 2d
+    Webklient (K8.1 til K8.4)                                :f3c, 2026-09-17, 3d
+    Roller og rettigheder (K9.1)                             :f3d, 2026-09-19, 1d
+    Driftsovervågning (K10.1 til K10.3)                     :f3e, 2026-09-20, 2d
+
+    section Fase 4
+    Udkald og efterprøvning (K7)                            :f4a, 2026-09-22, 1d
+    Hærdning, frekvens- og payloadgrænser (K9.2)           :f4b, 2026-09-22, 1d
+    Testkonditioner (P10)                                    :f4c, 2026-09-23, 1d
+    Færdiggørelse af rapporter (P11)                       :f4d, 2026-09-23, 2d
+    Aflevering                                               :milestone, m1, 2026-09-24, 0d
+
+    section Løbende
+    Logbog (L1)                                              :active, l1, 2026-08-31, 25d
+    Rapportskrivning (L2)                                    :active, l2, 2026-09-08, 17d
+
+    section Fase 5
+    Generalprøve og demonstration (P12)                     :f5a, 2026-09-25, 5d
+    Fremlæggelse                                            :milestone, m2, 2026-09-30, 0d
