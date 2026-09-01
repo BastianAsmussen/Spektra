@@ -1,0 +1,92 @@
+[workspace]
+resolver = "2"
+members = ["protocol"]
+
+[workspace.metadata.crane]
+name = "spektra"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Bastian Asmussen <bastian@asmussen.tech>"]
+license = "MIT"
+repository = "https://github.com/BastianAsmussen/H6_Svendeproeve"
+keywords = ["sdr", "radio", "monitoring", "grpc"]
+categories = ["network-programming", "embedded", "science"]
+
+[workspace.dependencies]
+argon2 = "0.6"
+askama = { version = "0.16", features = ["serde_json"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
+axum-extra = { version = "0.12", features = ["cookie"] }
+chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
+clap = { version = "4.6", features = ["derive"] }
+color-eyre = "0.6"
+deadpool-diesel = { version = "0.7", features = ["postgres"] }
+diesel = { version = "2.3", features = ["postgres", "chrono", "serde_json"] }
+diesel-derive-enum = { version = "3.0.0-beta.1", features = ["postgres"] }
+diesel_migrations = { version = "2.3", features = ["postgres"] }
+dotenvy = "0.15"
+futures-util = { version = "0.3", default-features = false, features = [
+    "std",
+    "sink",
+] }
+
+hex = "0.4"
+num-complex = "0.4"
+prost = "0.14"
+prost-types = "0.14"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "default-tls",
+] }
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+soapysdr = "0.5.1"
+spektra-fft = { version = "0.2.0", features = ["num-complex"] }
+strum = { version = "0.28", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+tonic = "0.14"
+tonic-build = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7", features = ["fs", "set-header"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = { version = "5", features = ["axum_extras", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 } # "UMM, AKSHUALLY"
+nursery = { level = "deny", priority = -1 }
+
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic_in_result_fn = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+
+[workspace.lints.rust]
+deprecated_safe = "deny"
+let_underscore = "deny"
+nonstandard_style = "deny"
+future_incompatible = "warn"
+keyword_idents = "warn"
+rust_2024_compatibility = "warn"
