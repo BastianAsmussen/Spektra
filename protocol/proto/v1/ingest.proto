@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package spektra.v1;
+
+import "v1/channel.proto";
+import "v1/health.proto";
+import "v1/measurement.proto";
+import "v1/node.proto";
+
+service NodeIngest {
+  // First-boot self-registration (see node.proto). Unauthenticated.
+  rpc RegisterNode(NodeRegistrationRequest) returns (NodeRegistrationResponse);
+
+  // One aggregation window's measurements. (See measurement.proto)
+  rpc SubmitMeasurements(MeasurementReport) returns (IngestAck);
+
+  // Node operational state. (See health.proto)
+  rpc ReportHealth(HealthReport) returns (HealthAck);
+
+  // The channels this node is assigned to monitor. (See channel.proto)
+  rpc GetChannelPlan(ChannelPlanRequest) returns (ChannelPlan);
+}

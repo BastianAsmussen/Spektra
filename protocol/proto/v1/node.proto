@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package spektra.v1;
+
+import "google/protobuf/timestamp.proto";
+import "v1/common.proto";
+
+// Geographic location of the antenna.
+message Location {
+  // WGS84 latitude in decimal degrees, -90.0 to 90.0.
+  double latitude = 1;
+  // WGS84 longitude in decimal degrees, -180.0 to 180.0.
+  double longitude = 2;
+}
+
+// Description of the node's receiver chain.
+message Hardware {
+  // Receiver model, e.g. "RTL-SDR Blog V4" or "Airspy Mini".
+  string device = 1;
+  // Free form.
+  string antenna = 2;
+  uint64 max_sample_rate_hz = 3;
+}
+
+// What a node can measure and report.
+message Capabilities {
+  // Metrics the node can derive, see common.proto.
+  repeated Metric metrics = 1;
+  // Modulation schemes the node can demodulate.
+  repeated Modulation modulations = 2;
+}
+
+// First-boot self-registration.
+message NodeRegistrationRequest {
+  // Must be "1" for the spektra.v1 service.
+  string protocol_version = 1;
+  string identity = 2;
+  // Human-readable (not an identifier).
+  string name = 3;
+  Location location = 4;
+  Hardware hardware = 5;
+  Capabilities capabilities = 6;
+}
+
+message NodeRegistrationResponse {
+  // Echo of the protocol version the server answered with.
+  string protocol_version = 1;
+  // Server-assigned node id, stable for the lifetime of the node.
+  int64 node_id = 2;
+  string credential = 3;
+  google.protobuf.Timestamp server_time = 4;
+}

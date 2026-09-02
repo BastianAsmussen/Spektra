@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package spektra.v1;
+
+// Modulation scheme of a monitored channel.
+enum Modulation {
+  // Zero value; sent by mistake or by a node that failed to set the field.
+  MODULATION_UNSPECIFIED = 0;
+  // Analog FM broadcast, 87.5 to 108 MHz in most of the world.
+  MODULATION_FM = 1;
+  // Digital Audio Broadcasting, Band III, 174 to 240 MHz.
+  MODULATION_DAB = 2;
+}
+
+// A derived signal-quality dimension.
+enum Metric {
+  // Zero value; sent by mistake or by a node that failed to set the field.
+  METRIC_UNSPECIFIED = 0;
+  // Signal strength in dBFS, relative to the ADC full scale. Never positive.
+  METRIC_SIGNAL_STRENGTH = 1;
+  // Signal-to-noise ratio in dB.
+  METRIC_SIGNAL_TO_NOISE = 2;
+  // Carrier offset in Hz: observed minus expected carrier frequency.
+  METRIC_CARRIER_OFFSET = 3;
+  METRIC_DEMOD_ERROR_RATE = 4;
+  METRIC_SPECTRUM_OCCUPANCY = 5;
+}
+
+// Statistical summary of one metric over one aggregation window.
+message SampleStats {
+  double min = 1;
+  double max = 2;
+  double mean = 3;
+  // For even sample counts the two middle values are averaged.
+  double median = 4;
+  // Sample standard deviation, n - 1 denominator.
+  double stddev = 5;
+  double p95 = 6;
+  // Always at least 1.
+  uint64 sample_count = 7;
+}

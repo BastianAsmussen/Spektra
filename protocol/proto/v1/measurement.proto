@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package spektra.v1;
+
+import "google/protobuf/timestamp.proto";
+import "v1/common.proto";
+
+// One metric and its summary over the report window.
+message MetricReading {
+  Metric metric = 1;
+  SampleStats stats = 2;
+}
+
+// All metrics of one monitored channel over the report window.
+message ChannelMeasurement {
+  uint64 frequency_hz = 1;
+  Modulation modulation = 2;
+  // Free-form, informational only.
+  string label = 3;
+  // One per metric the node derived for this channel.
+  repeated MetricReading readings = 4;
+}
+
+message MeasurementReport {
+  // Must be "1" for the spektra.v1 service.
+  string protocol_version = 1;
+  // Start of the aggregation window, inclusive.
+  google.protobuf.Timestamp window_start = 2;
+  // End of the aggregation window, exclusive.
+  google.protobuf.Timestamp window_end = 3;
+  // Measured channels. A channel may appear at most once.
+  repeated ChannelMeasurement channels = 4;
+}
+
+// Acknowledgement for a measurement report.
+message IngestAck {
+  // Echo of the protocol version the server answered with.
+  string protocol_version = 1;
+  // Server clock, for the node's clock-offset tracking.
+  google.protobuf.Timestamp server_time = 2;
+  // Number of channel measurements accepted and persisted.
+  uint64 accepted_channels = 3;
+}

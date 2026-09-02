@@ -1,0 +1,30 @@
+// Spektra protocol v1: node health reports.
+
+syntax = "proto3";
+
+package spektra.v1;
+
+import "google/protobuf/timestamp.proto";
+import "v1/common.proto";
+
+// Node self-report of its operational state.
+message HealthReport {
+  // Must be "1" for the spektra.v1 service.
+  string protocol_version = 1;
+  // When the node took these readings.
+  google.protobuf.Timestamp measured_at = 2;
+  double uptime_seconds = 3;
+  double load_1m = 4;
+  double load_5m = 5;
+  double load_15m = 6;
+  double cpu_temperature_celsius = 7;
+  // Clock offset (s): node minus server, from registration/ingest acks.
+  double clock_offset_seconds = 8;
+}
+
+message HealthAck {
+  // Echo of the protocol version the server answered with.
+  string protocol_version = 1;
+  // Server clock, for the node's clock-offset tracking.
+  google.protobuf.Timestamp server_time = 2;
+}

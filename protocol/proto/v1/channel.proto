@@ -1,0 +1,38 @@
+// Spektra v1 channel plan; poll by version (cheap if unchanged).
+
+syntax = "proto3";
+
+package spektra.v1;
+
+import "google/protobuf/timestamp.proto";
+import "v1/common.proto";
+
+// One channel this node is asked to monitor.
+message ChannelAssignment {
+  uint64 frequency_hz = 1;
+  Modulation modulation = 2;
+  // Free-form channel label, informational only, e.g. "DR P4 Nordjylland".
+  string label = 3;
+  // Occupied BW (Hz) for in-band window; 0 => modulation default.
+  uint32 bandwidth_hz = 4;
+}
+
+// Request for the calling node's own plan.
+message ChannelPlanRequest {
+  // Must be "1" for the spektra.v1 service.
+  string protocol_version = 1;
+  // Version the node holds, or 0; server always returns the full plan.
+  uint64 known_plan_version = 2;
+}
+
+// The channels assigned to the calling node.
+message ChannelPlan {
+  // Echo of the protocol version the server answered with.
+  string protocol_version = 1;
+  // Monotonic; increases when assignments change, never decreases.
+  uint64 plan_version = 2;
+  // Assigned channels; each frequency at most once. Empty: idle.
+  repeated ChannelAssignment channels = 3;
+  // Server clock when the plan was issued.
+  google.protobuf.Timestamp issued_at = 4;
+}
