@@ -1,0 +1,21 @@
+[package]
+name = "emulator"
+description = "Spektra fleet emulator: registers fake nodes and sends reports over the real protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../README.md"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+clap.workspace = true
+color-eyre.workspace = true
+protocol = { path = "../protocol" }
+tokio.workspace = true
+tonic.workspace = true
+
+[lints]
+workspace = true
