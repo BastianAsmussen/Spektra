@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["protocol"]
+members = ["protocol", "server"]
 
 [workspace.metadata.crane]
 name = "spektra"
