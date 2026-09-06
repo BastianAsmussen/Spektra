@@ -1,0 +1,51 @@
+name: test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: spektra_test
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: spektra_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libsoapysdr-dev clang libclang-dev pkg-config
+
+      - name: rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "."
+
+      - name: check formatting
+        run: cargo fmt --all --check
+
+      - name: build
+        run: cargo build --release --workspace --locked
+
+      - name: run tests
+        run: cargo test --release --workspace --locked
+        env:
+          TEST_DATABASE_URL: postgres://spektra_test:test_password@localhost:5432/spektra_test
+
+      - name: run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::multiple_crate_versions
