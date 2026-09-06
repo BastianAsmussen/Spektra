@@ -1,0 +1,58 @@
+{%- import "fragments/icons.html" as icon -%}
+
+{% for node in nodes %}
+  <div id="admin-node-{{ node.id }}"
+    class="flex flex-wrap items-center justify-between gap-3 border-b border-surface0 px-4 py-3
+      last:border-b-0">
+    <div class="min-w-0">
+      <p class="flex items-center gap-2 truncate font-medium text-text">
+        {{ node.name }}
+        {% if node.suspended %}
+          <span class="shrink-0 rounded border border-red px-1.5 py-0.5 text-xs text-red">
+            Suspenderet
+          </span>
+        {% endif %}
+        {% if !node.enrolled %}
+          <span class="shrink-0 rounded border border-yellow px-1.5 py-0.5 text-xs text-yellow">
+            Afventer tilmelding
+          </span>
+        {% endif %}
+      </p>
+      <p class="font-mono text-xs text-overlay0">#{{ node.id }}</p>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <a href="/nodes/{{ node.id }}"
+        class="flex h-8 w-8 items-center justify-center rounded-md border border-surface0
+          text-subtext0 transition hover:border-blue hover:text-blue">
+        {% call icon::pencil("h-4 w-4", node.name) %}{% endcall %}
+      </a>
+
+      <button type="button"
+        hx-post="/fragments/admin/nodes/{{ node.id }}/credential"
+        hx-target="#admin-nodes" hx-swap="innerHTML"
+        hx-confirm="Udsted ny nøgle til {{ node.name }}? Den nuværende holder op med at virke."
+        class="flex h-8 items-center gap-1.5 rounded-md border border-surface0 px-2.5 text-xs
+          text-subtext0 transition hover:border-yellow hover:text-yellow">
+        {% call icon::chip("h-3.5 w-3.5") %}{% endcall %}Ny nøgle
+      </button>
+
+      <form hx-post="/fragments/admin/nodes/{{ node.id }}/suspension"
+        hx-target="#admin-node-{{ node.id }}" hx-swap="outerHTML">
+        <input type="hidden" name="suspended" value="{{ !node.suspended }}">
+        <button type="submit"
+          class="flex h-8 items-center gap-1.5 rounded-md border border-surface0 px-2.5 text-xs
+            transition
+            {%- if node.suspended %} text-green hover:border-green
+            {%- else %} text-red hover:border-red{% endif %}">
+          {%- if node.suspended %}{% call icon::check("h-3.5 w-3.5") %}{% endcall %}Genoptag
+          {%- else %}{% call icon::close("h-3.5 w-3.5") %}{% endcall %}Suspendér{% endif -%}
+        </button>
+      </form>
+    </div>
+  </div>
+{% else %}
+  {% if list %}
+    <p data-empty class="px-4 py-3 text-sm text-overlay0">Ingen noder er registreret endnu.</p>
+  {% endif %}
+{% endfor %}

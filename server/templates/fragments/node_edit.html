@@ -1,0 +1,59 @@
+{%- import "fragments/icons.html" as icon -%}
+
+<form class="mt-4 grid gap-4 rounded-md border border-surface0 bg-canvas p-4"
+  hx-post="/fragments/nodes/{{ id }}/edit" hx-target="#node-panel" hx-swap="innerHTML">
+  <h3 class="text-sm font-semibold text-text">Rediger node</h3>
+
+  <div class="grid gap-4 md:grid-cols-2">
+    <label class="grid content-start gap-2">
+      <span class="text-sm font-medium text-subtext0">Navn</span>
+      <input type="text" name="name" required maxlength="100" value="{{ name }}"
+        class="h-10 rounded-md border border-surface0 bg-mantle px-3 text-sm text-text
+          focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+    </label>
+
+    {% if may_assign_owner %}
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">Ejer</span>
+        <select name="owner_id"
+          class="h-10 rounded-md border border-surface0 bg-mantle px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+          <option value="0"{% if owner_id.is_none() %} selected{% endif %}>Ingen</option>
+          {% for candidate in owners %}
+            <option value="{{ candidate.id }}"{% if candidate.selected %} selected{% endif %}>{{ candidate.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+    {% endif %}
+
+    {#- Both or neither; the handler rejects a half-filled pair. -#}
+    <label class="grid content-start gap-2">
+      <span class="text-sm font-medium text-subtext0">Breddegrad</span>
+      <input type="number" name="latitude" step="any" min="-90" max="90"
+        value="{{ latitude }}" placeholder="57.05"
+        class="h-10 rounded-md border border-surface0 bg-mantle px-3 text-sm text-text
+          focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+    </label>
+
+    <label class="grid content-start gap-2">
+      <span class="text-sm font-medium text-subtext0">Længdegrad</span>
+      <input type="number" name="longitude" step="any" min="-180" max="180"
+        value="{{ longitude }}" placeholder="9.92"
+        class="h-10 rounded-md border border-surface0 bg-mantle px-3 text-sm text-text
+          focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+    </label>
+  </div>
+
+  <div class="flex flex-wrap items-center gap-2">
+    <button type="submit"
+      class="flex items-center gap-1.5 rounded-md bg-blue px-3 py-2 text-sm font-semibold
+        text-canvas transition hover:opacity-90">
+      {% call icon::check("h-4 w-4") %}{% endcall %}Gem
+    </button>
+    <button type="button" hx-on:click="this.closest('#node-edit').replaceChildren()"
+      class="rounded-md border border-surface0 px-3 py-2 text-sm text-subtext0 transition
+        hover:border-red hover:text-red">
+      Annullér
+    </button>
+  </div>
+</form>

@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{%- import "fragments/icons.html" as icon -%}
+
+{% block title %}Administration | Spektra{% endblock %}
+
+{% block chrome %}{% include "fragments/header.html" %}{% endblock %}
+
+{% block content %}
+<main class="mx-auto grid w-full max-w-5xl gap-8 px-4 py-6 sm:px-6 sm:py-8">
+  <section>
+    <h1 class="text-xl font-semibold tracking-tight text-text">Administration</h1>
+    <p class="mt-1.5 text-sm text-subtext0">
+      Opret brugere, tildel roller og tag noder ud af flåden.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Ny bruger</h2>
+
+    <form hx-post="/fragments/admin/users" hx-target="#admin-users" hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful) this.reset()"
+      class="grid gap-4 rounded-lg border border-surface0 bg-mantle p-5
+        md:grid-cols-2">
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">Navn</span>
+        <input type="text" name="full_name" required maxlength="100" autocomplete="off"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+      </label>
+
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">E-mailadresse</span>
+        <input type="email" name="email" required maxlength="320" autocapitalize="none"
+          autocomplete="off"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+      </label>
+
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">Rolle</span>
+        <select name="role"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+          {% for role in roles %}
+            <option value="{{ role.0 }}">{{ role.1 }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">Adgangskode</span>
+        <input type="password" name="password" required minlength="12"
+          autocomplete="new-password"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+        <span class="text-xs text-overlay0">Mindst 12 tegn.</span>
+      </label>
+
+      <button type="submit"
+        class="flex w-fit items-center gap-2 rounded-md bg-blue px-3.5 py-2.5 text-sm
+          font-semibold text-canvas transition hover:opacity-90 focus:outline-none
+          focus:ring-2 focus:ring-blue/50 md:col-span-2">
+        {% call icon::check("h-4 w-4") %}{% endcall %}Opret bruger
+      </button>
+    </form>
+  </section>
+
+  <section>
+    <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Brugere</h2>
+    <div id="admin-users" class="rounded-lg border border-surface0 bg-mantle">
+      {% include "fragments/admin_users.html" %}
+    </div>
+  </section>
+
+  <section>
+    <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Ny node</h2>
+
+    <form hx-post="/fragments/admin/nodes" hx-target="#admin-nodes" hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.successful) this.reset()"
+      class="grid gap-4 rounded-lg border border-surface0 bg-mantle p-5 md:grid-cols-2">
+      <label class="grid content-start gap-2 md:col-span-2">
+        <span class="text-sm font-medium text-subtext0">Navn</span>
+        <input type="text" name="name" required maxlength="100" autocomplete="off"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+      </label>
+
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">Breddegrad</span>
+        <input type="number" name="latitude" step="any" min="-90" max="90" placeholder="57.05"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+      </label>
+
+      <label class="grid content-start gap-2">
+        <span class="text-sm font-medium text-subtext0">Længdegrad</span>
+        <input type="number" name="longitude" step="any" min="-180" max="180" placeholder="9.92"
+          class="h-10 rounded-md border border-surface0 bg-canvas px-3 text-sm text-text
+            focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+      </label>
+
+      <button type="submit"
+        class="flex w-fit items-center gap-2 rounded-md bg-blue px-3.5 py-2.5 text-sm
+          font-semibold text-canvas transition hover:opacity-90 focus:outline-none
+          focus:ring-2 focus:ring-blue/50 md:col-span-2">
+        {% call icon::check("h-4 w-4") %}{% endcall %}Opret node og udsted nøgle
+      </button>
+    </form>
+
+    <div id="node-credential" class="mt-4 empty:hidden"></div>
+  </section>
+
+  <section>
+    <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Noder</h2>
+    <div id="admin-nodes" class="rounded-lg border border-surface0 bg-mantle">
+      {% include "fragments/admin_nodes.html" %}
+    </div>
+  </section>
+</main>
+{% endblock %}

@@ -1,0 +1,51 @@
+{% macro state_color(state) %}
+{%- if state == "reporting" %}text-green
+{%- else if state == "silent" %}text-yellow
+{%- else if state == "suspended" %}text-red
+{%- else %}text-overlay0{% endif -%}
+{% endmacro %}
+
+{% macro state_label(state) %}
+{%- if state == "reporting" %}rapporterer
+{%- else if state == "silent" %}tavs
+{%- else if state == "suspended" %}suspenderet
+{%- else %}aldrig set{% endif -%}
+{% endmacro %}
+
+{% macro state_badge(node_id, state, oob) %}
+<span id="node-{{ node_id }}-state"{% if oob %} hx-swap-oob="true"{% endif %}
+  data-state="{{ state }}"
+  class="shrink-0 text-xs uppercase tracking-wide {% call state_color(state) %}{% endcall %}">
+  {%- call state_label(state) %}{% endcall -%}
+</span>
+{% endmacro %}
+
+{% macro seen_at(node_id, at, oob) %}
+<time id="node-{{ node_id }}-at"{% if oob %} hx-swap-oob="true"{% endif %}
+  class="shrink-0 whitespace-nowrap text-xs text-subtext0"
+  datetime="{{ at.machine }}">{{ at.text }}</time>
+{% endmacro %}
+
+{% macro live(node_id, state, at, oob) %}
+{% call state_badge(node_id, state, oob) %}{% endcall %}
+{% call seen_at(node_id, at, oob) %}{% endcall %}
+{% endmacro %}
+
+{% macro tile(node_id, name, state, at) %}
+<article id="node-{{ node_id }}" data-node="{{ node_id }}"
+  class="cursor-pointer rounded border border-surface0 bg-mantle p-3 transition hover:border-blue">
+  <header class="flex items-baseline justify-between gap-2">
+    <h3 class="min-w-0 truncate font-medium text-text">{{ name }}</h3>
+    {% call state_badge(node_id, state, false) %}{% endcall %}
+  </header>
+  <p class="mt-1 flex items-baseline justify-between gap-2 font-mono text-xs text-overlay0">
+    <span>#{{ node_id }}</span>
+    {% call seen_at(node_id, at, false) %}{% endcall %}
+  </p>
+</article>
+{% endmacro %}
+
+{% macro next_page(next) %}
+<div hx-get="/fragments/fleet{{ next }}" hx-trigger="revealed" hx-swap="outerHTML"
+  class="col-span-full py-2 text-center text-xs text-overlay0">henter flere noder</div>
+{% endmacro %}

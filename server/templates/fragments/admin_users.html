@@ -1,0 +1,55 @@
+{%- import "fragments/icons.html" as icon -%}
+
+{% for user in users %}
+  <div id="admin-user-{{ user.id }}"
+    class="grid gap-3 border-b border-surface0 px-4 py-3 last:border-b-0
+      md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+    <div class="min-w-0">
+      <p class="flex items-center gap-2 truncate font-medium text-text">
+        {{ user.full_name }}
+        {% if user.deactivated %}
+          <span class="shrink-0 rounded border border-red px-1.5 py-0.5 text-xs text-red">
+            Deaktiveret
+          </span>
+        {% endif %}
+      </p>
+      <p class="truncate font-mono text-xs text-overlay0">{{ user.email }}</p>
+    </div>
+
+    {#- The API refuses both changes on your own account, so no control. -#}
+    {% if user.id == current_user_id %}
+      <p class="text-xs text-overlay0">Din egen konto</p>
+    {% else %}
+      <div class="flex flex-wrap items-center gap-2">
+        <select name="role" aria-label="Rolle for {{ user.full_name }}"
+          hx-post="/fragments/admin/users/{{ user.id }}"
+          hx-target="#admin-user-{{ user.id }}" hx-swap="outerHTML"
+          class="h-8 rounded-md border border-surface0 bg-canvas px-2 text-xs text-text
+            focus:border-blue focus:outline-none">
+          {% for role in roles %}
+            <option value="{{ role.0 }}"{% if role.0 == user.role %} selected{% endif %}>
+              {{ role.1 }}
+            </option>
+          {% endfor %}
+        </select>
+
+        <form hx-post="/fragments/admin/users/{{ user.id }}"
+          hx-target="#admin-user-{{ user.id }}" hx-swap="outerHTML">
+          <input type="hidden" name="deactivated" value="{{ !user.deactivated }}">
+          <button type="submit"
+            class="flex h-8 items-center gap-1.5 rounded-md border border-surface0 px-2.5 text-xs
+              transition
+              {%- if user.deactivated %} text-green hover:border-green
+              {%- else %} text-red hover:border-red{% endif %}">
+            {%- if user.deactivated %}{% call icon::check("h-3.5 w-3.5") %}{% endcall %}Aktivér
+            {%- else %}{% call icon::close("h-3.5 w-3.5") %}{% endcall %}Deaktivér{% endif -%}
+          </button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+{% else %}
+  {% if list %}
+    <p data-empty class="px-4 py-3 text-sm text-overlay0">Ingen brugere.</p>
+  {% endif %}
+{% endfor %}
