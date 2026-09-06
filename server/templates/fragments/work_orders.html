@@ -1,0 +1,6 @@
+{%- import "fragments/work_order.html" as orders_macro -%}
+{% for order in orders %}
+  {% call orders_macro::entry(order) %}{% endcall %}
+{% else %}
+  <p data-empty class="text-sm text-overlay0">Ingen arbejdsordrer.</p>
+{% endfor %}

@@ -1,0 +1,58 @@
+{% macro entry(order) %}
+<article id="work-order-{{ order.id }}" data-status="{{ order.status }}"
+  class="rounded border border-surface0 bg-mantle p-3">
+  <header class="flex items-baseline justify-between gap-2">
+    <h3 class="font-medium text-text">{{ order.station_name }}</h3>
+    <span class="text-xs uppercase tracking-wide
+      {%- if order.status == "completed" %} text-green{% else %} text-yellow{% endif %}">
+      {%- if order.status == "completed" %}afsluttet{% else %}tildelt{% endif -%}
+    </span>
+  </header>
+
+  <p class="mt-1 text-xs text-subtext0">
+    {{ order.node_name }} - {{ order.technician }}
+    <span class="font-mono text-overlay0">alarm #{{ order.alarm_id }}</span>
+  </p>
+  <p class="mt-1 font-mono text-xs text-overlay0">
+    sendt <time datetime="{{ order.dispatched_at.machine }}">{{ order.dispatched_at.text }}</time>
+    {% if !order.completed_at.is_empty() %}
+      - afsluttet
+      <time datetime="{{ order.completed_at.machine }}">{{ order.completed_at.text }}</time>
+    {% endif %}
+  </p>
+
+  {% if let Some(fault_present) = order.fault_present %}
+    <p class="mt-2 text-xs
+      {%- if fault_present %} text-red{% else %} text-green{% endif %}">
+      {%- if fault_present %}Fejlen var der stadig{% else %}Fejlen var væk ved ankomst{% endif -%}
+    </p>
+    {% if !order.cause.is_empty() %}
+      <p class="mt-1 text-xs text-text">Årsag: {{ order.cause }}</p>
+    {% endif %}
+    {% if !order.action_taken.is_empty() %}
+      <p class="mt-1 text-xs text-text">Handling: {{ order.action_taken }}</p>
+    {% endif %}
+  {% endif %}
+
+  {% if order.may_complete %}
+    <form class="mt-3 grid gap-2"
+      hx-post="/fragments/work-orders/{{ order.id }}/complete"
+      hx-target="#work-order-{{ order.id }}" hx-swap="outerHTML">
+      <label class="flex items-center gap-2 text-xs text-subtext0">
+        <input type="checkbox" name="fault_present" value="true"
+          class="accent-red">
+        Fejlen var der stadig
+      </label>
+      <input type="text" name="cause" maxlength="200" placeholder="Årsag"
+        class="rounded border border-surface0 bg-canvas px-2 py-1 text-xs text-text
+          placeholder:text-overlay0">
+      <input type="text" name="action_taken" maxlength="200" placeholder="Handling"
+        class="rounded border border-surface0 bg-canvas px-2 py-1 text-xs text-text
+          placeholder:text-overlay0">
+      <button type="submit"
+        class="justify-self-start rounded border border-surface0 bg-surface0 px-2 py-1 text-xs
+          text-text transition hover:border-green hover:text-green">Afslut ordre</button>
+    </form>
+  {% endif %}
+</article>
+{% endmacro %}

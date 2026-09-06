@@ -1,2 +1,12 @@
+pub mod admin;
+pub mod alarms;
 pub mod auth;
 pub mod errors;
+pub mod health;
+pub mod nodes;
+pub mod ops;
+pub mod pages;
+pub mod series;
+pub mod visibility;
+pub mod work_orders;
+pub mod ws;

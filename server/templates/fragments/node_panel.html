@@ -1,0 +1,153 @@
+{%- import "fragments/icons.html" as icon -%}
+
+<article class="rounded border border-surface0 bg-mantle p-3 sm:p-4">
+  <header class="flex flex-wrap items-start justify-between gap-3">
+    <div class="min-w-0">
+      <h2 class="flex items-center gap-2 text-base font-semibold leading-tight text-text">
+        {% call icon::antenna("h-4 w-4 shrink-0 text-blue") %}{% endcall %}
+        <span class="truncate">{{ name }}</span>
+      </h2>
+      <p class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-overlay0">
+        <span>#{{ id }}</span>
+        {%- if enrolled %}
+          <span class="truncate">{{ external_identity }}</span>
+        {%- else %}
+          <span class="text-yellow">afventer tilmelding</span>
+        {% endif -%}
+        {%- if let Some(position) = position %}
+          <span class="flex items-center gap-1">
+            {% call icon::pin("h-3.5 w-3.5") %}{% endcall %}{{ position }}
+          </span>
+        {% endif -%}
+      </p>
+    </div>
+
+    <div class="flex shrink-0 items-center gap-2">
+      <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide
+        {%- if state == "reporting" %} text-green
+        {%- else if state == "silent" %} text-yellow
+        {%- else if state == "suspended" %} text-red
+        {%- else %} text-overlay0{% endif %}">
+        {% call icon::dot("h-2 w-2") %}{% endcall %}
+        {%- if state == "reporting" %}rapporterer
+        {%- else if state == "silent" %}tavs
+        {%- else if state == "suspended" %}suspenderet
+        {%- else %}aldrig set{% endif -%}
+      </span>
+      {% if may_edit %}
+        <button type="button"
+          hx-get="/fragments/nodes/{{ id }}/edit" hx-target="#node-edit"
+          hx-swap="innerHTML"
+          class="flex h-7 w-7 items-center justify-center rounded border border-surface0
+            text-subtext0 transition hover:border-blue hover:text-blue">
+          {% call icon::pencil("h-4 w-4", name) %}{% endcall %}
+        </button>
+      {% endif %}
+      <button type="button" aria-label="Luk" data-close-panel
+        class="flex h-7 w-7 items-center justify-center rounded border border-surface0
+          text-overlay0 transition hover:border-red hover:text-red">
+        {% call icon::close("h-4 w-4") %}{% endcall %}
+      </button>
+    </div>
+  </header>
+
+  <div id="node-edit" class="empty:hidden"></div>
+
+  <div class="mt-5 grid gap-6 2xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+  <section class="min-w-0">
+    <h3 class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-subtext0">
+      {% call icon::chip("h-4 w-4 text-overlay0") %}{% endcall %}Maskinen
+    </h3>
+    {% if let Some(health) = health %}
+      <p class="mt-1 flex flex-wrap items-center gap-x-3 font-mono text-xs text-overlay0">
+        <span class="flex items-center gap-1">
+          {% call icon::clock("h-3.5 w-3.5") %}{% endcall %}
+          <time datetime="{{ health.measured_at.machine }}">{{ health.measured_at.text }}</time>
+        </span>
+        <span>oppe i {{ health.uptime }}</span>
+      </p>
+      <div class="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2 2xl:grid-cols-1">
+        {% for meter in health.meters %}
+          <div class="grid gap-x-3 gap-y-1
+            sm:grid-cols-[minmax(7rem,10rem)_minmax(0,1fr)_auto] sm:items-center">
+            <span class="flex items-baseline justify-between gap-2 text-xs text-subtext0">
+              {{ meter.label }}
+              <span class="font-mono tabular-nums text-text sm:hidden">{{ meter.value }}</span>
+            </span>
+            <div class="meter meter--{{ meter.tone }}">
+              <span style="width: {{ meter.percent }}%"></span>
+            </div>
+            <span class="hidden text-right font-mono text-xs tabular-nums text-text sm:block">
+              {{ meter.value }}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="mt-1 text-sm text-overlay0">Noden har ikke sendt en helbredsmåling endnu.</p>
+    {% endif %}
+  </section>
+
+  <section class="min-w-0 2xl:mt-0">
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <h3 class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-subtext0">
+        {% call icon::waves("h-4 w-4 text-overlay0") %}{% endcall %}Kanaler
+      </h3>
+
+      <div class="flex flex-wrap items-center gap-3">
+        <button type="button" data-panel-link aria-pressed="{{ show_all }}"
+          class="rounded border px-2 py-0.5 text-xs transition
+            {%- if show_all %} border-blue bg-surface0 text-blue
+            {%- else %} border-surface0 text-subtext0 hover:border-blue hover:text-blue{% endif %}"
+          hx-get="{{ toggle.fragment }}" hx-target="#node-panel" hx-swap="innerHTML"
+          data-url="{{ toggle.url }}">{{ toggle.label }}</button>
+
+        <div class="flex gap-1">
+          {% for span in spans %}
+            <button type="button" data-panel-link aria-pressed="{{ span.current }}"
+              class="rounded border px-2 py-0.5 text-xs transition
+                {%- if span.current %} border-blue text-blue
+                {%- else %} border-surface0 text-subtext0 hover:border-blue hover:text-blue{% endif %}"
+              hx-get="{{ span.fragment }}" hx-target="#node-panel" hx-swap="innerHTML"
+              data-url="{{ span.url }}">{{ span.label }}</button>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    {% for channel in channels %}
+      <details class="mt-3 border-t border-surface0 pt-3" {% if loop.first %}open{% endif %}>
+        <summary class="cursor-pointer text-sm text-text marker:text-overlay0">
+          {{ channel.name }}
+          <span class="font-mono text-xs text-overlay0">
+            {{ channel.frequency }} - {{ channel.modulation }}
+          </span>
+        </summary>
+
+        <div class="chart-grid mt-2 grid gap-3">
+          {% for metric in channel.metrics %}
+            <figure class="rounded border border-surface0 bg-mantle p-3"
+              data-series="/api/series/{{ id }}/{{ channel.id }}/{{ metric }}?hours={{ hours }}">
+              <figcaption class="mb-2 flex items-baseline justify-between gap-2">
+                <span class="text-sm font-medium text-text" data-chart-name>{{ metric }}</span>
+                <span class="flex items-baseline gap-2">
+                  {#- Hidden until a drag actually zooms. uPlot's own way back
+                      out is a double-click, which nobody discovers, so the way
+                      back is a button that appears exactly when it is needed. -#}
+                  <button type="button" data-chart-reset hidden
+                    class="rounded border border-surface0 px-1.5 py-0.5 text-xs text-subtext0
+                      transition hover:border-blue hover:text-blue">Nulstil zoom</button>
+                  <span class="font-mono text-xs text-overlay0" data-chart-source></span>
+                </span>
+              </figcaption>
+              <div data-chart class="chart-canvas text-xs text-overlay0">henter</div>
+            </figure>
+          {% endfor %}
+        </div>
+      </details>
+    {% else %}
+      <p class="mt-1 text-sm text-overlay0">Noden er ikke tildelt nogen kanaler.</p>
+    {% endfor %}
+  </section>
+  </div>
+</article>

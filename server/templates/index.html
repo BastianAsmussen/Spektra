@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{%- import "fragments/node_tile.html" as tiles -%}
+{%- import "fragments/icons.html" as icon -%}
+
+{% block title %}Flåde | Spektra{% endblock %}
+
+{% block body_attrs %} hx-ext="ws" ws-connect="/api/ws"{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/leaflet.css">
+<link rel="stylesheet" href="/static/uplot.css">
+<script src="/static/leaflet.js" defer></script>
+<script src="/static/uplot.js" defer></script>
+<script src="/static/charts.js" defer></script>
+<script src="/static/map.js" defer></script>
+{% endblock %}
+
+{% block chrome %}{% include "fragments/header.html" %}{% endblock %}
+
+{% block content %}
+<main class="grid flex-1 gap-4 px-4 py-4 sm:gap-6 sm:px-6 sm:py-6
+  lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] 2xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+  <aside id="node-panel" class="min-w-0 lg:col-span-2 empty:hidden">{{ panel|safe }}</aside>
+
+  <section class="min-w-0">
+    <div id="map-shell" class="bg-canvas">
+    <div class="flex min-h-10 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-t border
+      border-b-0 border-surface0 bg-mantle px-3 py-1.5 md:flex-nowrap md:py-0">
+      <h2 class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-widest
+        text-subtext0">
+        {% call icon::pin("h-4 w-4 text-overlay0") %}{% endcall %}Flåde
+      </h2>
+
+      <time id="clock" class="order-last w-full font-mono text-xs tabular-nums tracking-wide
+        text-subtext0 md:order-0 md:mx-auto md:w-auto md:text-text">&nbsp;</time>
+
+      <div class="ml-auto flex flex-wrap items-center gap-2">
+        <div class="relative">
+          {% call icon::search("pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-overlay0") %}{% endcall %}
+          <input type="search" id="fleet-search" placeholder="Søg node"
+            aria-label="Søg efter node"
+            class="h-7 w-28 rounded border border-surface0 bg-canvas pl-7 pr-2 text-xs text-text
+              placeholder:text-overlay0 focus:border-blue focus:outline-none sm:w-36">
+        </div>
+        <select id="fleet-state" aria-label="Filtrér på tilstand"
+          class="h-7 rounded border border-surface0 bg-canvas px-2 text-xs text-text
+            focus:border-blue focus:outline-none">
+          <option value="">Alle</option>
+          <option value="reporting">Rapporterer</option>
+          <option value="silent">Tavse</option>
+          <option value="suspended">Suspenderede</option>
+          <option value="never seen">Aldrig set</option>
+        </select>
+        <button type="button" id="fleet-refit" title="Zoom til udvalg"
+          aria-label="Zoom til udvalg"
+          class="flex h-7 w-7 items-center justify-center rounded border border-surface0
+            text-subtext0 transition hover:border-blue hover:text-blue">
+          {% call icon::fit("h-4 w-4") %}{% endcall %}
+        </button>
+        <button type="button" id="map-fullscreen" title="Fuld skærm"
+          aria-label="Fuld skærm" aria-pressed="false"
+          class="flex h-7 w-7 items-center justify-center rounded border border-surface0
+            text-subtext0 transition hover:border-blue hover:text-blue">
+          <span data-when="windowed">{% call icon::expand("h-4 w-4") %}{% endcall %}</span>
+          <span data-when="fullscreen" hidden>{% call icon::collapse("h-4 w-4") %}{% endcall %}</span>
+        </button>
+      </div>
+    </div>
+
+      <div id="map" class="rounded-b border border-surface0"></div>
+    </div>
+
+    <p id="unplaced" class="mt-2 text-xs text-overlay0"></p>
+
+    {#- Columns come from `#fleet` in the stylesheet, which fits as many as the
+        width allows instead of picking a number at a breakpoint. -#}
+    <div id="fleet" class="mt-4 grid gap-3">
+      {% for node in nodes %}
+        {% call tiles::tile(node.id, node.name, node.state, node.at) %}{% endcall %}
+      {% else %}
+        <p class="text-sm text-overlay0">Ingen noder er registreret endnu.</p>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="grid min-w-0 content-start gap-6">
+    <div>
+      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Alarmer</h2>
+      <div id="alarm-feed" class="grid gap-3"
+        hx-get="/fragments/alarms" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+
+    <div>
+      <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Arbejdsordrer</h2>
+      <div id="work-orders" class="grid gap-3"
+        hx-get="/fragments/work-orders" hx-trigger="load, spektra:orders from:body"
+        hx-swap="innerHTML"></div>
+    </div>
+  </section>
+</main>
+
+<script type="application/json" id="fleet-data">{{ nodes|json|safe }}</script>
+{% endblock %}

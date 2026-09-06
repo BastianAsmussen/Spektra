@@ -1,0 +1,111 @@
+{%- import "fragments/icons.html" as icon -%}
+
+<header class="sticky top-0 z-500 border-b border-surface0 bg-mantle">
+  <div class="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2 sm:px-6 xl:py-0">
+    <a href="/" class="flex items-center gap-2 text-text">
+      {% call icon::antenna("h-5 w-5 text-blue") %}{% endcall %}
+      <span class="text-base font-semibold tracking-tight leading-none">Spektra</span>
+      <span class="hidden text-xs leading-none text-overlay0 sm:inline">signalovervågning</span>
+    </a>
+
+    {#- Wraps to its own row rather than hiding: the counters are the densest
+        information on the page.
+
+        A `<nav>`, not the `<dl>` this was: a `<dl>` may only hold `dt`, `dd`
+        or a `div` wrapping those, so it cannot carry the links. -#}
+    <nav aria-label="Nøgletal"
+      class="order-last flex w-full flex-wrap items-center gap-x-4 gap-y-1 text-xs
+        xl:order-0 xl:w-auto xl:gap-5">
+      <a href="/#fleet" class="flex items-center gap-1.5 rounded transition hover:text-blue">
+        {% call icon::antenna("h-4 w-4 text-overlay0") %}{% endcall %}
+        <span class="text-subtext0">Noder</span>
+        <span id="count-nodes" class="font-mono tabular-nums text-text">{{ nodes_total }}</span>
+      </a>
+      <a href="/?state=silent#fleet" class="flex items-center gap-1.5 rounded transition hover:text-blue">
+        {% call icon::mute("h-4 w-4 text-overlay0") %}{% endcall %}
+        <span class="text-subtext0">Tavse</span>
+        <span id="count-silent" class="font-mono tabular-nums {% if silent > 0 %}text-yellow{% else %}text-overlay0{% endif %}">{{ silent }}</span>
+      </a>
+      <a href="/#alarm-feed" class="flex items-center gap-1.5 rounded transition hover:text-blue">
+        {% call icon::bell("h-4 w-4 text-overlay0") %}{% endcall %}
+        <span class="text-subtext0">Alarmer</span>
+        <span id="count-alarms" class="font-mono tabular-nums {% if open_alarms > 0 %}text-red{% else %}text-overlay0{% endif %}">{{ open_alarms }}</span>
+      </a>
+      <a href="/#work-orders" class="flex items-center gap-1.5 rounded transition hover:text-blue">
+        {% call icon::wrench("h-4 w-4 text-overlay0") %}{% endcall %}
+        <span class="text-subtext0">Ordrer</span>
+        <span id="count-orders" class="font-mono tabular-nums {% if open_orders > 0 %}text-blue{% else %}text-overlay0{% endif %}">{{ open_orders }}</span>
+      </a>
+    </nav>
+
+    <div class="ml-auto flex items-center gap-2">
+      {% if live %}
+        <span id="live-status" class="hidden items-center gap-1.5 font-mono text-xs text-overlay0 sm:flex">
+          {% call icon::dot("h-2 w-2") %}{% endcall %}
+          <span data-live-text>forbinder</span>
+        </span>
+      {% endif %}
+
+      <div class="flex h-8 items-center rounded border border-surface0" role="group" aria-label="Tema">
+        {% for choice in ["system", "light", "dark"] %}
+          <button type="button" data-theme-choice="{{ choice }}"
+            class="flex h-full items-center gap-1 px-2 text-xs text-subtext0 transition
+              hover:text-text aria-pressed:bg-surface0 aria-pressed:text-text
+              first:rounded-l last:rounded-r"
+            aria-pressed="false"
+            title="{% if *choice == "system" %}Følg systemet{% else if *choice == "light" %}Lyst tema{% else %}Mørkt tema{% endif %}">
+            {%- if *choice == "system" %}{% call icon::auto("h-4 w-4") %}{% endcall %}
+            {%- else if *choice == "light" %}{% call icon::sun("h-4 w-4") %}{% endcall %}
+            {%- else %}{% call icon::moon("h-4 w-4") %}{% endcall %}{% endif -%}
+            <span class="sr-only">{% if *choice == "system" %}Auto{% else if *choice == "light" %}Lys{% else %}Mørk{% endif %}</span>
+          </button>
+        {% endfor %}
+      </div>
+
+      <details id="menu-wrap" class="relative">
+        <summary id="menu-button"
+          class="flex h-8 list-none items-center gap-2 rounded border border-surface0 px-2 text-xs
+            text-subtext0 transition hover:border-blue hover:text-text [&::-webkit-details-marker]:hidden">
+          {% call icon::menu("h-4 w-4") %}{% endcall %}
+          <span class="hidden leading-none sm:inline">{{ user_name }}</span>
+        </summary>
+
+        <div id="menu"
+          class="absolute right-0 z-500 mt-1 w-60 rounded border border-surface0 bg-mantle p-1
+            shadow-lg shadow-crust/40">
+          <p class="px-3 py-2 text-xs leading-relaxed text-overlay0">
+            {{ user_name }}<br>
+            <span class="font-mono">{{ user_role }}</span>
+          </p>
+          <hr class="my-1 border-surface0">
+          <a href="/" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
+            {% call icon::antenna("h-4 w-4 text-overlay0") %}{% endcall %}Flåde
+          </a>
+          <a href="/#alarm-feed" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
+            {% call icon::bell("h-4 w-4 text-overlay0") %}{% endcall %}Alarmer
+          </a>
+          <a href="/#work-orders" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
+            {% call icon::wrench("h-4 w-4 text-overlay0") %}{% endcall %}Arbejdsordrer
+          </a>
+          {% if user_role == "administrator" %}
+            <a href="/admin" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
+              {% call icon::sliders("h-4 w-4 text-overlay0") %}{% endcall %}Administration
+            </a>
+          {% endif %}
+          <a href="/swagger-ui/" target="_blank" rel="noopener"
+            class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
+            {% call icon::chip("h-4 w-4 text-overlay0") %}{% endcall %}API-dokumentation
+          </a>
+          <hr class="my-1 border-surface0">
+          <form method="post" action="/logout">
+            <button type="submit"
+              class="flex w-full items-center gap-2 rounded px-3 py-2 text-left text-sm text-red
+                hover:bg-surface0">
+              {% call icon::logout("h-4 w-4") %}{% endcall %}Log ud
+            </button>
+          </form>
+        </div>
+      </details>
+    </div>
+  </div>
+</header>

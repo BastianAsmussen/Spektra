@@ -1,0 +1,62 @@
+{% macro entry(alarm) %}
+<article id="alarm-{{ alarm.id }}" data-state="{{ alarm.state }}"
+  class="rounded border border-surface1 bg-mantle p-3">
+  <header class="flex items-baseline justify-between gap-2">
+    <h3 class="font-medium text-text">{{ alarm.node_name }}</h3>
+    <span class="text-xs uppercase tracking-wide
+      {%- if alarm.state == "closed" %} text-green
+      {%- else if alarm.state == "open" %} text-red
+      {%- else %} text-yellow{% endif %}">
+      {%- if alarm.state == "open" %}åben
+      {%- else if alarm.state == "acknowledged" %}kvitteret
+      {%- else if alarm.state == "under_verification" %}under verifikation
+      {%- else %}lukket{% endif -%}
+    </span>
+  </header>
+
+  <p class="mt-1 text-xs text-subtext0">
+    {% if alarm.metric.is_empty() %}tilstandsskift{% else %}{{ alarm.metric }}{% endif %}
+    <span class="font-mono text-overlay0">alarm #{{ alarm.id }}</span>
+  </p>
+
+  {% if !alarm.summary.is_empty() %}
+    <p class="mt-1 text-xs text-text">{{ alarm.summary }}</p>
+  {% endif %}
+
+  <p class="mt-1 font-mono text-xs text-overlay0">
+    <time datetime="{{ alarm.raised_at.machine }}">{{ alarm.raised_at.text }}</time>
+  </p>
+
+  {% if !alarm.actions.is_empty() || alarm.may_dispatch %}
+    <form class="mt-3 grid gap-2"
+      hx-post="/fragments/alarms/{{ alarm.id }}/transition"
+      hx-target="#alarm-{{ alarm.id }}" hx-swap="outerHTML">
+      {% if !alarm.actions.is_empty() %}
+        <input type="text" name="reason" required maxlength="200"
+          placeholder="Begrundelse"
+          class="rounded border border-surface0 bg-canvas px-2 py-1 text-xs text-text
+            placeholder:text-overlay0">
+        <div class="flex flex-wrap gap-2">
+          {% for action in alarm.actions %}
+            <button type="submit" name="to" value="{{ action.to }}"
+              class="rounded border border-surface0 bg-surface0 px-2 py-1 text-xs text-text
+                transition hover:border-blue hover:text-blue">{{ action.label }}</button>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+    </form>
+
+    {% if alarm.may_dispatch %}
+      <details class="mt-2">
+        <summary class="inline-flex w-fit items-center gap-1.5 rounded border border-surface0
+          px-2 py-1 text-xs text-subtext0 transition hover:border-blue hover:text-blue">
+          Send tekniker
+        </summary>
+        <div hx-get="/fragments/alarms/{{ alarm.id }}/dispatch"
+          hx-trigger="toggle once from:closest details" hx-swap="innerHTML"></div>
+      </details>
+    {% endif %}
+  {% endif %}
+</article>
+{% endmacro %}

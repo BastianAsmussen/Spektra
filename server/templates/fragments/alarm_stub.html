@@ -1,0 +1,15 @@
+{% if replace %}
+<article id="alarm-{{ alarm_id }}" hx-swap-oob="outerHTML"
+  hx-get="/fragments/alarms/{{ alarm_id }}" hx-trigger="load" hx-swap="outerHTML"
+  class="rounded border border-surface1 bg-mantle p-3 text-xs text-overlay0">
+  opdaterer alarm #{{ alarm_id }}
+</article>
+{% else %}
+<div id="alarm-feed" hx-swap-oob="afterbegin">
+  <article id="alarm-{{ alarm_id }}"
+    hx-get="/fragments/alarms/{{ alarm_id }}" hx-trigger="load" hx-swap="outerHTML"
+    class="rounded border border-surface1 bg-mantle p-3 text-xs text-overlay0">
+    henter alarm #{{ alarm_id }}
+  </article>
+</div>
+{% endif %}
