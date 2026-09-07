@@ -33,6 +33,7 @@ jobs:
             fi
 
             cd "$REPO_DIR"
-            git pull --ff-only origin master
+            git fetch origin master
+            git reset --hard FETCH_HEAD
 
             sudo nixos-rebuild switch --flake "$REPO_DIR#spektra"
