@@ -109,6 +109,7 @@
             enable = true;
             host = if cfg.domain == null then "0.0.0.0" else "127.0.0.1";
             grpcHost = if cfg.domain == null then "0.0.0.0" else "127.0.0.1";
+            environmentFile = config.sops.secrets.spektra_env.path;
           };
 
           caddy = mkIf (cfg.domain != null) {
@@ -165,9 +166,18 @@
           defaultSopsFile = ./secrets/spektra.yaml;
           age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
 
-          secrets.deploy_ssh_key = {
-            owner = "deploy";
-            mode = "0400";
+          secrets = {
+            deploy_ssh_key = {
+              owner = "deploy";
+              mode = "0400";
+            };
+
+            spektra_env = {
+              format = "binary";
+              sopsFile = ./secrets/spektra.env;
+              mode = "0400";
+              restartUnits = [ "spektra.service" ];
+            };
           };
         };
 
