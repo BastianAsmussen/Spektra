@@ -1,0 +1,15 @@
+services:
+  test-db:
+    image: docker.io/library/postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spektra_test
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: spektra_test
+    ports:
+      - 5432:5432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "spektra_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
