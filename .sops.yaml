@@ -3,7 +3,7 @@ keys:
   - &spektra age17jdwkrm9txu4zw02puc7wee972996pumcte2l92qrdcnn6kgwvys0fs9x3
 
 creation_rules:
-  - path_regex: nix/secrets/spektra\.yaml$
+  - path_regex: nix/secrets/[^/]+\.(yaml|env)$
     key_groups:
       - age:
           - *bastian
