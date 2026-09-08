@@ -69,7 +69,7 @@ pub struct SuspensionRequest {
 }
 
 /// Reject anybody who is not an administrator.
-async fn require_admin(state: &AppState, user_id: i64) -> Result<Access, ApiError> {
+pub(crate) async fn require_admin(state: &AppState, user_id: i64) -> Result<Access, ApiError> {
     let access = visibility::resolve(state, user_id).await?;
     if !access.is_admin() {
         return Err(ApiError::Forbidden(

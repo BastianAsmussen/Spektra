@@ -16,6 +16,9 @@ const INTERVAL: Duration = Duration::from_hours(1);
 ///
 const DETECTION_INTERVAL: Duration = Duration::from_mins(1);
 
+///
+const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
+
 const PARTITIONS_AHEAD: u32 = 2;
 
 ///
@@ -311,5 +314,16 @@ fn prune(conn: &mut diesel::pg::PgConnection) {
             Ok(deleted) => tracing::info!(deleted, ?resolution, "rollup buckets pruned"),
             Err(err) => tracing::error!(error = %err, ?resolution, "could not prune rollups"),
         }
+    }
+}
+
+///
+pub async fn sample_throughput(state: AppState) {
+    let mut timer = tokio::time::interval(SAMPLE_INTERVAL);
+
+    loop {
+        timer.tick().await;
+
+        state.metrics.sample();
     }
 }

@@ -1,0 +1,109 @@
+{%- import "fragments/icons.html" as icon -%}
+
+{% if healthy %}
+  <p class="flex items-center gap-2 rounded-lg border border-surface0 bg-mantle px-3 py-2 text-sm text-green">
+    {% call icon::check("h-4 w-4") %}{% endcall %}Serveren betragter sig selv som sund.
+  </p>
+{% else %}
+  <ul class="grid gap-1 rounded-lg border border-red bg-mantle px-3 py-2 text-sm text-red">
+    {% for problem in problems %}
+      <li class="flex items-center gap-2">
+        {% call icon::bell("h-4 w-4") %}{% endcall %}{{ problem }}
+      </li>
+    {% endfor %}
+  </ul>
+{% endif %}
+
+<section>
+  <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">
+    Dataindtag <span class="font-normal normal-case text-overlay0">over {{ window_seconds }} s</span>
+  </h2>
+  <dl class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Målinger/s</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ measurements }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Helbred/s</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ health }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Afvist/s</dt>
+      <dd class="font-mono text-lg tabular-nums text-yellow">{{ rejected }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Fejlet/s</dt>
+      <dd class="font-mono text-lg tabular-nums text-red">{{ failed }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section>
+  <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">HTTP</h2>
+  <dl class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Forespørgsler/s</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ http_requests }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Serverfejl/s</dt>
+      <dd class="font-mono text-lg tabular-nums text-red">{{ http_server_errors }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Middel svartid</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ http_mean_ms }} ms</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Værste, siden start</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ http_slowest_ms }} ms</dd>
+    </div>
+  </dl>
+</section>
+
+<section>
+  <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Forbindelsespulje</h2>
+  <dl class="grid grid-cols-3 gap-3">
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Størrelse</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ pool_size }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Ledige</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ pool_available }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">I kø</dt>
+      <dd class="font-mono text-lg tabular-nums {% if pool_waiting > 0 %}text-yellow{% else %}text-text{% endif %}">{{ pool_waiting }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section>
+  <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Siden start</h2>
+  <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Målinger modtaget</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ measurements_total }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Registreringer</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ registrations }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Alarmer rejst</dt>
+      <dd class="font-mono text-lg tabular-nums text-text">{{ alarms_raised }}</dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Seneste indtag</dt>
+      <dd class="font-mono text-sm tabular-nums text-text">
+        {%- if last_ingest.is_empty() %}aldrig{% else %}<time datetime="{{ last_ingest.machine }}">{{ last_ingest.text }}</time>{% endif -%}
+      </dd>
+    </div>
+    <div class="rounded-lg border border-surface0 bg-mantle px-3 py-2">
+      <dt class="text-xs text-subtext0">Seneste detektion</dt>
+      <dd class="font-mono text-sm tabular-nums text-text">
+        {%- if last_detection.is_empty() %}aldrig{% else %}<time datetime="{{ last_detection.machine }}">{{ last_detection.text }}</time>{% endif -%}
+      </dd>
+    </div>
+  </dl>
+</section>

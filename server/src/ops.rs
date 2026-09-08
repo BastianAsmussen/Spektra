@@ -1,5 +1,6 @@
-use std::sync::Arc;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -13,6 +14,22 @@ const DETECTOR_STALL: Duration = Duration::from_mins(3);
 const REJECTION_RATE: f64 = 0.33;
 
 const MIN_CALLS_FOR_RATE: u64 = 20;
+
+const HISTORY: usize = 300;
+
+const RATE_SAMPLES: usize = 10;
+
+#[derive(Debug, Clone, Copy)]
+struct Sample {
+    at: i64,
+    measurements: u64,
+    health: u64,
+    rejected: u64,
+    failed: u64,
+    http_requests: u64,
+    http_server_errors: u64,
+    http_micros: u64,
+}
 
 /// Live counters, shared by every handler.
 #[derive(Debug, Default)]
@@ -32,6 +49,7 @@ pub struct Metrics {
     pub http_micros: AtomicU64,
     /// Longest single HTTP handler, in microseconds.
     pub http_slowest_micros: AtomicU64,
+    history: Mutex<VecDeque<Sample>>,
 }
 
 impl Metrics {
@@ -125,6 +143,61 @@ impl Metrics {
             pool_available: status.available,
             pool_waiting: status.waiting,
         }
+    }
+
+    /// Record where the counters stand right now.
+    pub fn sample(&self) {
+        let reading = Sample {
+            at: Utc::now().timestamp(),
+            measurements: self.measurements_accepted.load(Ordering::Relaxed),
+            health: self.health_accepted.load(Ordering::Relaxed),
+            rejected: self.ingest_rejected.load(Ordering::Relaxed),
+            failed: self.ingest_failed.load(Ordering::Relaxed),
+            http_requests: self.http_requests.load(Ordering::Relaxed),
+            http_server_errors: self.http_server_errors.load(Ordering::Relaxed),
+            http_micros: self.http_micros.load(Ordering::Relaxed),
+        };
+
+        let mut history = self.history.lock().unwrap_or_else(PoisonError::into_inner);
+        if history.len() >= HISTORY {
+            history.pop_front();
+        }
+
+        history.push_back(reading);
+    }
+
+    /// Rates over the last [`RATE_SAMPLES`] seconds.
+    #[must_use]
+    pub fn rates(&self) -> Rates {
+        let history = self.history.lock().unwrap_or_else(PoisonError::into_inner);
+        let oldest = history.len().saturating_sub(RATE_SAMPLES.saturating_add(1));
+
+        match (history.get(oldest), history.back()) {
+            (Some(older), Some(newest)) => rates_between(older, newest),
+            _ => Rates::default(),
+        }
+    }
+
+    /// Measurements per second across the whole history, oldest first.
+    #[must_use]
+    pub fn throughput(&self) -> (Vec<i64>, Vec<f64>) {
+        let history = self.history.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut at = Vec::with_capacity(history.len());
+        let mut value = Vec::with_capacity(history.len());
+
+        for (older, newer) in history.iter().zip(history.iter().skip(1)) {
+            let seconds = u64::try_from(newer.at.saturating_sub(older.at)).unwrap_or(0);
+
+            at.push(newer.at);
+            value.push(ratio(
+                newer.measurements.saturating_sub(older.measurements),
+                seconds,
+            ));
+        }
+
+        drop(history);
+
+        (at, value)
     }
 }
 
@@ -228,7 +301,8 @@ const fn mean(total: u64, count: u64) -> u64 {
 }
 
 /// A ratio of two counts.
-fn ratio(part: u64, whole: u64) -> f64 {
+#[must_use]
+pub(crate) fn ratio(part: u64, whole: u64) -> f64 {
     if whole == 0 {
         return 0.0;
     }
@@ -237,6 +311,48 @@ fn ratio(part: u64, whole: u64) -> f64 {
     let whole = u32::try_from(whole.min(u64::from(u32::MAX))).unwrap_or(u32::MAX);
 
     f64::from(part) / f64::from(whole)
+}
+
+/// Everything the drift page shows as a per-second figure.
+#[derive(Debug, Clone, Copy, Default, Serialize, ToSchema)]
+pub struct Rates {
+    /// Measurement reports accepted per second.
+    pub measurements: f64,
+    /// Health reports accepted per second.
+    pub health: f64,
+    /// Ingest calls refused per second.
+    pub rejected: f64,
+    /// Ingest calls that failed inside the server, per second.
+    pub failed: f64,
+    /// HTTP requests served per second.
+    pub http_requests: f64,
+    /// HTTP responses with a 5xx status, per second.
+    pub http_server_errors: f64,
+    /// Mean handler time over the window, in microseconds.
+    pub http_mean_micros: u64,
+    /// Seconds the rates cover. Zero until a second sample exists.
+    pub window_seconds: i64,
+}
+
+fn rates_between(older: &Sample, newest: &Sample) -> Rates {
+    let window_seconds = newest.at.saturating_sub(older.at);
+    let span = u64::try_from(window_seconds).unwrap_or(0);
+    let per = |now: u64, then: u64| ratio(now.saturating_sub(then), span);
+    let requests = newest.http_requests.saturating_sub(older.http_requests);
+
+    Rates {
+        measurements: per(newest.measurements, older.measurements),
+        health: per(newest.health, older.health),
+        rejected: per(newest.rejected, older.rejected),
+        failed: per(newest.failed, older.failed),
+        http_requests: per(newest.http_requests, older.http_requests),
+        http_server_errors: per(newest.http_server_errors, older.http_server_errors),
+        http_mean_micros: mean(
+            newest.http_micros.saturating_sub(older.http_micros),
+            requests,
+        ),
+        window_seconds,
+    }
 }
 
 #[cfg(test)]

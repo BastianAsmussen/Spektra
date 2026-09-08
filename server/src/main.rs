@@ -28,6 +28,7 @@ const DEFAULT_STATIC_DIR: &str = "server/assets/dist";
         work_orders::dispatch,
         work_orders::complete,
         ops::get_status,
+        ops::get_throughput,
         series::get_series,
         admin::list_users,
         admin::create_user,
@@ -51,6 +52,7 @@ const DEFAULT_STATIC_DIR: &str = "server/assets/dist";
         server::api::work_orders::FieldReport,
         server::api::work_orders::CompletionResult,
         server::api::ops::OpsStatus,
+        server::api::ops::ThroughputSeries,
         server::ops::Snapshot,
         server::api::series::Series,
         server::api::series::Source,
@@ -143,6 +145,8 @@ async fn main() -> Result<()> {
         tracing::info!("ntfy is not configured; alarms go to the live channel only");
     }
     tokio::spawn(jobs::detect(state.clone(), notifier));
+
+    tokio::spawn(jobs::sample_throughput(state.clone()));
 
     let app = Router::new()
         .merge(health::routes())

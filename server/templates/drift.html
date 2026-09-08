@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{%- import "fragments/icons.html" as icon -%}
+{%- import "fragments/chart.html" as chart -%}
+
+{% block title %}Drift | Spektra{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/uplot.css">
+<script src="/static/uplot.js" defer></script>
+<script src="/static/charts.js" defer></script>
+{% endblock %}
+
+{% block chrome %}{% include "fragments/header.html" %}{% endblock %}
+
+{% block content %}
+<main class="mx-auto grid w-full max-w-5xl gap-8 px-4 py-6 sm:px-6 sm:py-8">
+  <section>
+    <h1 class="text-xl font-semibold tracking-tight text-text">Drift</h1>
+    <p class="mt-1.5 text-sm text-subtext0">
+      Serverens eget gennemløb, svartider og køer. Tællerne nulstilles, når processen genstarter.
+    </p>
+  </section>
+
+  <section>
+    <h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-subtext0">Gennemløb</h2>
+    <figure class="rounded-lg border border-surface0 bg-mantle p-3"
+      data-series="/api/ops/throughput" data-refresh="2">
+      <figcaption class="mb-2 flex items-baseline justify-between text-xs">
+        <span data-chart-name class="text-subtext0"></span>
+        <span class="flex items-baseline gap-2">
+          {% call chart::reset_zoom() %}{% endcall %}
+          <span class="font-mono text-overlay0" data-chart-source></span>
+        </span>
+      </figcaption>
+      <div data-chart class="chart-canvas text-xs text-overlay0"></div>
+    </figure>
+  </section>
+
+  <div id="ops-tiles" class="grid gap-8"
+    hx-get="/fragments/ops" hx-trigger="load, every 2s" hx-swap="innerHTML">
+  </div>
+</main>
+{% endblock %}
