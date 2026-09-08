@@ -1,4 +1,4 @@
-use chrono::{Datelike as _, Months, NaiveDate, NaiveDateTime, NaiveTime, Utc};
+use chrono::{Datelike as _, NaiveDate, Utc};
 use diesel::connection::SimpleConnection as _;
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
@@ -14,20 +14,21 @@ struct PartitionRow {
     relname: String,
 }
 
+/// The day after `start`.
 #[must_use]
-pub fn month_start(date: NaiveDate) -> Option<NaiveDate> {
-    NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
+pub const fn next_day(start: NaiveDate) -> Option<NaiveDate> {
+    start.succ_opt()
 }
 
-#[must_use]
-pub const fn next_month(start: NaiveDate) -> Option<NaiveDate> {
-    start.checked_add_months(Months::new(1))
-}
-
-///
+/// What a day's partition is called.
 #[must_use]
 pub fn partition_name(start: NaiveDate) -> String {
-    format!("{PARENT}_{:04}_{:02}", start.year(), start.month())
+    format!(
+        "{PARENT}_{:04}_{:02}_{:02}",
+        start.year(),
+        start.month(),
+        start.day()
+    )
 }
 
 /// Every partition currently attached to `measurements`, default included.
@@ -49,17 +50,13 @@ pub fn existing(conn: &mut PgConnection) -> QueryResult<Vec<String>> {
     Ok(rows.into_iter().map(|row| row.relname).collect())
 }
 
-///
-///
-/// # Errors
-///
-pub fn ensure_month(conn: &mut PgConnection, start: NaiveDate) -> QueryResult<bool> {
-    let Some(end) = next_month(start) else {
+fn ensure_day(conn: &mut PgConnection, start: NaiveDate, known: &[String]) -> QueryResult<bool> {
+    let Some(end) = next_day(start) else {
         return Ok(false);
     };
     let name = partition_name(start);
 
-    if existing(conn)?.contains(&name) {
+    if known.contains(&name) {
         return Ok(false);
     }
 
@@ -87,26 +84,27 @@ pub fn ensure_month(conn: &mut PgConnection, start: NaiveDate) -> QueryResult<bo
     Ok(true)
 }
 
-///
+/// Create every partition from `first` to `last`, inclusive.
 ///
 /// # Errors
 ///
-pub fn ensure_ahead(
+/// Returns the diesel error from the first day that fails.
+pub fn ensure_range(
     conn: &mut PgConnection,
-    today: NaiveDate,
-    ahead: u32,
+    first: NaiveDate,
+    last: NaiveDate,
 ) -> QueryResult<Vec<String>> {
-    let Some(mut start) = month_start(today) else {
-        return Ok(Vec::new());
-    };
+    let mut known = existing(conn)?;
+    let mut start = first;
     let mut created = Vec::new();
 
-    for _ in 0..=ahead {
-        if ensure_month(conn, start)? {
-            created.push(partition_name(start));
+    while start <= last {
+        if ensure_day(conn, start, &known)? {
+            let name = partition_name(start);
+            known.push(name.clone());
+            created.push(name);
         }
-
-        let Some(next) = next_month(start) else {
+        let Some(next) = next_day(start) else {
             break;
         };
         start = next;
@@ -115,7 +113,7 @@ pub fn ensure_ahead(
     Ok(created)
 }
 
-///
+/// Drop every daily partition that ends at or before `cutoff`.
 ///
 /// # Errors
 ///
@@ -131,7 +129,8 @@ pub fn drop_before(conn: &mut PgConnection, cutoff: NaiveDate) -> QueryResult<Ve
         let Some(start) = parse_partition_name(&name) else {
             continue;
         };
-        let Some(end) = next_month(start) else {
+
+        let Some(end) = next_day(start) else {
             continue;
         };
 
@@ -148,18 +147,13 @@ pub fn drop_before(conn: &mut PgConnection, cutoff: NaiveDate) -> QueryResult<Ve
 
 fn parse_partition_name(name: &str) -> Option<NaiveDate> {
     let suffix = name.strip_prefix(PARENT)?.strip_prefix('_')?;
-    let (year, month) = suffix.split_once('_')?;
+    let (year, rest) = suffix.split_once('_')?;
+    let (month, day) = rest.split_once('_')?;
 
-    NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, 1)
-}
-
-#[must_use]
-pub const fn midnight(date: NaiveDate) -> NaiveDateTime {
-    date.and_time(NaiveTime::MIN)
+    NaiveDate::from_ymd_opt(year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)
 }
 
 /// Today, by the server's clock.
-///
 #[must_use]
 pub fn today() -> NaiveDate {
     Utc::now().date_naive()
@@ -170,16 +164,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_partition_is_named_after_its_month() {
-        let start = NaiveDate::from_ymd_opt(2026, 9, 1).expect("a real date");
+    fn a_partition_is_named_after_its_day() {
+        let start = NaiveDate::from_ymd_opt(2026, 9, 17).expect("a real date");
 
-        assert_eq!(partition_name(start), "measurements_2026_09");
+        assert_eq!(partition_name(start), "measurements_2026_09_17");
     }
 
     #[test]
     fn a_partition_name_round_trips() {
-        for (year, month) in [(2026, 1), (2026, 9), (2027, 12)] {
-            let start = NaiveDate::from_ymd_opt(year, month, 1).expect("a real date");
+        for (year, month, day) in [(2026, 1, 1), (2026, 9, 17), (2027, 12, 31)] {
+            let start = NaiveDate::from_ymd_opt(year, month, day).expect("a real date");
 
             assert_eq!(parse_partition_name(&partition_name(start)), Some(start));
         }
@@ -189,20 +183,21 @@ mod tests {
     fn the_default_partition_is_not_one_of_ours() {
         assert_eq!(parse_partition_name(DEFAULT_PARTITION), None);
         assert_eq!(parse_partition_name("measurements"), None);
-        assert_eq!(parse_partition_name("rollups_2026_09"), None);
+        assert_eq!(parse_partition_name("measurements_2026_09"), None);
+        assert_eq!(parse_partition_name("rollups_2026_09_17"), None);
     }
 
     #[test]
-    fn a_month_starts_on_its_first_day() {
-        let date = NaiveDate::from_ymd_opt(2026, 9, 17).expect("a real date");
+    fn the_last_day_of_a_month_rolls_into_the_next() {
+        let september = NaiveDate::from_ymd_opt(2026, 9, 30).expect("a real date");
 
-        assert_eq!(month_start(date), NaiveDate::from_ymd_opt(2026, 9, 1));
+        assert_eq!(next_day(september), NaiveDate::from_ymd_opt(2026, 10, 1));
     }
 
     #[test]
     fn december_rolls_into_january() {
-        let december = NaiveDate::from_ymd_opt(2026, 12, 1).expect("a real date");
+        let december = NaiveDate::from_ymd_opt(2026, 12, 31).expect("a real date");
 
-        assert_eq!(next_month(december), NaiveDate::from_ymd_opt(2027, 1, 1));
+        assert_eq!(next_day(december), NaiveDate::from_ymd_opt(2027, 1, 1));
     }
 }

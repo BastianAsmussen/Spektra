@@ -112,12 +112,12 @@ async fn a_fresh_database_has_only_the_default_partition() {
 }
 
 #[tokio::test]
-async fn partitions_are_created_ahead_of_the_current_month() {
-    let pool = test_pool("jobs", "ahead").await;
+async fn partitions_are_created_on_both_sides_of_today() {
+    let pool = test_pool("jobs", "range").await;
     let conn = pool.get().await.expect("connection");
 
     let created = conn
-        .interact(|conn| partitions::ensure_ahead(conn, day(2026, 9, 17), 2))
+        .interact(|conn| partitions::ensure_range(conn, day(2026, 9, 15), day(2026, 9, 19)))
         .await
         .expect("interact")
         .expect("partition creation");
@@ -125,9 +125,11 @@ async fn partitions_are_created_ahead_of_the_current_month() {
     assert_eq!(
         created,
         vec![
-            "measurements_2026_09".to_owned(),
-            "measurements_2026_10".to_owned(),
-            "measurements_2026_11".to_owned(),
+            "measurements_2026_09_15".to_owned(),
+            "measurements_2026_09_16".to_owned(),
+            "measurements_2026_09_17".to_owned(),
+            "measurements_2026_09_18".to_owned(),
+            "measurements_2026_09_19".to_owned(),
         ]
     );
 
@@ -136,7 +138,7 @@ async fn partitions_are_created_ahead_of_the_current_month() {
         .await
         .expect("interact")
         .expect("catalog query");
-    assert_eq!(found.len(), 4, "three months plus the default: {found:?}");
+    assert_eq!(found.len(), 6, "five days plus the default: {found:?}");
 }
 
 #[tokio::test]
@@ -145,12 +147,12 @@ async fn creating_a_partition_twice_is_a_no_op() {
     let conn = pool.get().await.expect("connection");
 
     let first = conn
-        .interact(|conn| partitions::ensure_ahead(conn, day(2026, 9, 17), 0))
+        .interact(|conn| partitions::ensure_range(conn, day(2026, 9, 17), day(2026, 9, 17)))
         .await
         .expect("interact")
         .expect("first pass");
     let second = conn
-        .interact(|conn| partitions::ensure_ahead(conn, day(2026, 9, 17), 0))
+        .interact(|conn| partitions::ensure_range(conn, day(2026, 9, 17), day(2026, 9, 17)))
         .await
         .expect("interact")
         .expect("second pass");
@@ -186,36 +188,79 @@ async fn rows_already_in_the_default_partition_move_into_the_new_one() {
         .expect("count");
     assert_eq!(default_before, 1);
 
-    conn.interact(|conn| partitions::ensure_ahead(conn, day(2026, 9, 17), 0))
+    conn.interact(|conn| partitions::ensure_range(conn, day(2026, 9, 17), day(2026, 9, 17)))
         .await
         .expect("interact")
         .expect("partition creation");
 
-    let (default_after, month_after, total) = conn
+    let (default_after, day_after, total) = conn
         .interact(|conn| {
             let default_after =
                 diesel::sql_query("SELECT count(*) AS count FROM measurements_default")
                     .get_result::<Count>(conn)
                     .expect("default count")
                     .count;
-            let month_after =
-                diesel::sql_query("SELECT count(*) AS count FROM measurements_2026_09")
+            let day_after =
+                diesel::sql_query("SELECT count(*) AS count FROM measurements_2026_09_17")
                     .get_result::<Count>(conn)
-                    .expect("month count")
+                    .expect("day count")
                     .count;
             let total = measurements_schema::table
                 .count()
                 .get_result::<i64>(conn)
                 .expect("total count");
 
-            (default_after, month_after, total)
+            (default_after, day_after, total)
         })
         .await
         .expect("interact");
 
     assert_eq!(default_after, 0, "the row did not leave the default");
-    assert_eq!(month_after, 1, "the row did not land in its month");
+    assert_eq!(day_after, 1, "the row did not land in its day");
     assert_eq!(total, 1, "the row was duplicated rather than moved");
+}
+
+#[tokio::test]
+async fn a_backfilled_window_lands_in_its_own_partition() {
+    let pool = test_pool("jobs", "backfill").await;
+    let (node_id, channel_id) = seed_node_and_channel(&pool).await;
+
+    seed_measurement(
+        &pool,
+        node_id,
+        channel_id,
+        at(day(2026, 9, 1), 6, 30),
+        28.0,
+        60,
+    )
+    .await;
+
+    let conn = pool.get().await.expect("connection");
+    conn.interact(|conn| partitions::ensure_range(conn, day(2026, 8, 25), day(2026, 9, 15)))
+        .await
+        .expect("interact")
+        .expect("partition creation");
+
+    let (default_after, day_after) = conn
+        .interact(|conn| {
+            let default_after =
+                diesel::sql_query("SELECT count(*) AS count FROM measurements_default")
+                    .get_result::<Count>(conn)
+                    .expect("default count")
+                    .count;
+            let day_after =
+                diesel::sql_query("SELECT count(*) AS count FROM measurements_2026_09_01")
+                    .get_result::<Count>(conn)
+                    .expect("day count")
+                    .count;
+
+            (default_after, day_after)
+        })
+        .await
+        .expect("interact");
+
+    assert_eq!(default_after, 0, "the backfilled row stayed in the default");
+    assert_eq!(day_after, 1, "the backfilled row did not land in its day");
 }
 
 #[tokio::test]
@@ -223,13 +268,13 @@ async fn a_partition_past_the_horizon_is_dropped() {
     let pool = test_pool("jobs", "drop_old").await;
     let conn = pool.get().await.expect("connection");
 
-    conn.interact(|conn| partitions::ensure_ahead(conn, day(2026, 1, 5), 2))
+    conn.interact(|conn| partitions::ensure_range(conn, day(2026, 1, 5), day(2026, 1, 7)))
         .await
         .expect("interact")
         .expect("partition creation");
 
     let dropped = conn
-        .interact(|conn| partitions::drop_before(conn, day(2026, 3, 1)))
+        .interact(|conn| partitions::drop_before(conn, day(2026, 1, 7)))
         .await
         .expect("interact")
         .expect("drop");
@@ -237,8 +282,8 @@ async fn a_partition_past_the_horizon_is_dropped() {
     assert_eq!(
         dropped,
         vec![
-            "measurements_2026_01".to_owned(),
-            "measurements_2026_02".to_owned(),
+            "measurements_2026_01_05".to_owned(),
+            "measurements_2026_01_06".to_owned(),
         ]
     );
 
@@ -251,7 +296,7 @@ async fn a_partition_past_the_horizon_is_dropped() {
         found.contains(&"measurements_default".to_owned()),
         "the default partition was dropped: {found:?}"
     );
-    assert!(found.contains(&"measurements_2026_03".to_owned()));
+    assert!(found.contains(&"measurements_2026_01_07".to_owned()));
 }
 
 #[tokio::test]
@@ -466,6 +511,7 @@ async fn seed_rollup(
     .expect("rollup insert");
 }
 
+/// Twenty-eight days of hourly history around `mean`, with a wobble so MAD is not zero.
 async fn seed_baseline(pool: &Pool, node_id: i64, channel_id: i64, now: NaiveDateTime, mean: f64) {
     for back in 1..=28_u64 {
         let Some(day) = now.checked_sub_days(Days::new(back)) else {

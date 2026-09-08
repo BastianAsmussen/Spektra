@@ -45,7 +45,7 @@ impl Ingest {
         let token = bearer_token(metadata)?;
         let now = Utc::now().naive_utc();
 
-        let conn = self.state.pool.get().await.map_err(internal)?;
+        let conn = self.state.ingest_pool.get().await.map_err(internal)?;
         let (node_id, suspended) = conn
             .interact(move |conn| {
                 credentials_schema::table
@@ -236,7 +236,7 @@ impl Ingest {
             "modulations": capabilities.modulations,
         });
 
-        let conn = self.state.pool.get().await.map_err(internal)?;
+        let conn = self.state.ingest_pool.get().await.map_err(internal)?;
 
         conn.interact(move |conn| {
             conn.transaction(|conn| {
@@ -315,7 +315,7 @@ impl Ingest {
         let accepted_channels = u64::try_from(report.channel_count())
             .map_err(|_| Status::invalid_argument("the report carries too many channels"))?;
 
-        let conn = self.state.pool.get().await.map_err(internal)?;
+        let conn = self.state.ingest_pool.get().await.map_err(internal)?;
         let written = conn
             .interact(move |conn| report.write(conn, node_id))
             .await
@@ -345,7 +345,7 @@ impl Ingest {
         validate::health(request.get_ref())?;
         let row = persist::health_row(node_id, request.get_ref())?;
 
-        let conn = self.state.pool.get().await.map_err(internal)?;
+        let conn = self.state.ingest_pool.get().await.map_err(internal)?;
         let written = conn
             .interact(move |conn| persist::write_health(conn, &row))
             .await
@@ -369,7 +369,7 @@ impl Ingest {
         validate::channel_plan(request.get_ref())?;
         let known = request.into_inner().known_plan_version;
 
-        let conn = self.state.pool.get().await.map_err(internal)?;
+        let conn = self.state.ingest_pool.get().await.map_err(internal)?;
         let (plan_version, assignments) = conn
             .interact(move |conn| persist::channel_plan(conn, node_id))
             .await

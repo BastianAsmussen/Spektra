@@ -64,6 +64,7 @@ impl AlarmEvent {
 #[derive(Clone)]
 pub struct AppState {
     pub pool: deadpool_diesel::postgres::Pool,
+    pub ingest_pool: deadpool_diesel::postgres::Pool,
     pub node_events: broadcast::Sender<NodeEvent>,
     pub alarm_events: broadcast::Sender<AlarmEvent>,
     pub metrics: Arc<Metrics>,
@@ -76,11 +77,19 @@ impl AppState {
         let (node_events, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (alarm_events, _) = broadcast::channel(CHANNEL_CAPACITY);
         Self {
+            ingest_pool: pool.clone(),
             pool,
             node_events,
             alarm_events,
             metrics: Metrics::new(),
         }
+    }
+
+    /// Give ingest and the maintenance jobs a pool of their own.
+    #[must_use]
+    pub fn with_ingest_pool(mut self, pool: deadpool_diesel::postgres::Pool) -> Self {
+        self.ingest_pool = pool;
+        self
     }
 
     /// Publish a node event, ignoring the case where nobody is listening.
