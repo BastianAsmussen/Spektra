@@ -1,3 +1,5 @@
+// Spektra v1 measurements: aggregates only, no raw samples.
+
 syntax = "proto3";
 
 package spektra.v1;
@@ -21,6 +23,7 @@ message ChannelMeasurement {
   repeated MetricReading readings = 4;
 }
 
+// Single window. Any invalid channel/metric rejects the whole report.
 message MeasurementReport {
   // Must be "1" for the spektra.v1 service.
   string protocol_version = 1;
@@ -40,4 +43,6 @@ message IngestAck {
   google.protobuf.Timestamp server_time = 2;
   // Number of channel measurements accepted and persisted.
   uint64 accepted_channels = 3;
+  // Next delivery. Absent means keep current cadence.
+  ReportSchedule schedule = 4;
 }

@@ -1,6 +1,10 @@
+// Spektra v1 shared types. protocol_version on every request.
+
 syntax = "proto3";
 
 package spektra.v1;
+
+import "google/protobuf/timestamp.proto";
 
 // Modulation scheme of a monitored channel.
 enum Modulation {
@@ -22,7 +26,9 @@ enum Metric {
   METRIC_SIGNAL_TO_NOISE = 2;
   // Carrier offset in Hz: observed minus expected carrier frequency.
   METRIC_CARRIER_OFFSET = 3;
+  // Demod error 0..1. FM uses RDS block CRC failure rate.
   METRIC_DEMOD_ERROR_RATE = 4;
+  // Occupancy 0..1: share of bandwidth above the noise floor.
   METRIC_SPECTRUM_OCCUPANCY = 5;
 }
 
@@ -38,4 +44,9 @@ message SampleStats {
   double p95 = 6;
   // Always at least 1.
   uint64 sample_count = 7;
+}
+
+// Server-clock next delivery; node clamps deferral. Absent: own cadence.
+message ReportSchedule {
+  google.protobuf.Timestamp next_report_at = 1;
 }

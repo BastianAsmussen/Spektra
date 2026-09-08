@@ -5,6 +5,7 @@ use std::time::{Duration, SystemTime};
 use clap::Parser;
 use color_eyre::Result;
 use color_eyre::eyre::WrapErr;
+use protocol::schedule_delay;
 use protocol::v1::node_ingest_client::NodeIngestClient;
 use protocol::v1::{
     Capabilities, ChannelMeasurement, Hardware, HealthReport, Location, MeasurementReport, Metric,
@@ -27,7 +28,7 @@ const PLAN: [(u64, Modulation, &str); 6] = [
 
 /// Register a fake node, backfill its history, then keep reporting.
 #[derive(Parser, Debug)]
-#[command(author, version, about)]
+#[command(author, version, about, allow_negative_numbers = true)]
 struct Args {
     /// gRPC endpoint of the server.
     #[arg(short, long, default_value = "http://localhost:50051")]
@@ -148,7 +149,7 @@ fn report(
     let sample = signal.at(seconds(age_seconds));
 
     MeasurementReport {
-        protocol_version: "1".to_owned(),
+        protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
         window_start: Some(window_start.into()),
         window_end: Some(window_end.into()),
         channels: PLAN
@@ -176,7 +177,7 @@ fn health(signal: Signal, age_seconds: i64) -> HealthReport {
     let strain = (28.4 - sample.snr_db).max(0.0);
 
     HealthReport {
-        protocol_version: "1".to_owned(),
+        protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
         measured_at: Some(
             SystemTime::now()
                 .checked_sub(Duration::from_secs(age_seconds.max(0).unsigned_abs()))
@@ -192,7 +193,7 @@ fn health(signal: Signal, age_seconds: i64) -> HealthReport {
     }
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -210,7 +211,7 @@ async fn main() -> Result<()> {
     let signal = Signal::for_identity(&args.identity);
 
     let registration = NodeRegistrationRequest {
-        protocol_version: "1".to_owned(),
+        protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
         identity: args.identity.clone(),
         name: args.name.clone(),
         location: Some(Location {
@@ -254,6 +255,7 @@ async fn main() -> Result<()> {
         }
     );
 
+    let scheduled = schedule_delay(response.schedule.as_ref(), response.server_time.as_ref());
     let credential = response.credential;
     let backfilled = backfill(&client, &credential, signal, &args).await?;
     println!(
@@ -266,7 +268,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    live(&mut client, &credential, signal, &args).await
+    live(&mut client, &credential, signal, &args, scheduled).await
 }
 
 async fn backfill(
@@ -334,20 +336,27 @@ async fn live(
     credential: &str,
     signal: Signal,
     args: &Args,
+    scheduled: Option<Duration>,
 ) -> Result<()> {
-    let mut ticker = tokio::time::interval(Duration::from_secs(args.interval_seconds.max(1)));
+    let fallback = Duration::from_secs(args.interval_seconds.max(1));
+    let mut wait = scheduled.unwrap_or(fallback);
     println!(
         "{}: live, one window every {}s (ctrl-c to stop)",
         args.identity, args.interval_seconds
     );
 
     loop {
-        ticker.tick().await;
+        tokio::time::sleep(wait).await;
 
         let mut request = Request::new(report(signal, args.channels, 0, args.window_seconds));
         *request.metadata_mut() = bearer(credential)?;
-        if let Err(status) = client.submit_measurements(request).await {
-            eprintln!("{}: measurement rejected: {status}", args.identity);
+        match client.submit_measurements(request).await {
+            Ok(response) => {
+                let ack = response.into_inner();
+                wait = schedule_delay(ack.schedule.as_ref(), ack.server_time.as_ref())
+                    .unwrap_or(fallback);
+            }
+            Err(status) => eprintln!("{}: measurement rejected: {status}", args.identity),
         }
 
         let mut request = Request::new(health(signal, 0));
