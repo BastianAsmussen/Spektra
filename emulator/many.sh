@@ -17,6 +17,11 @@ usage() {
 		administration API first and enrols against the key that returns. -k is
 		an administrator's session_token, or set SPEKTRA_SESSION.
 
+		Both -s and -a point at the deployment; -a defaults to localhost and
+		is easy to forget when only -s is overridden:
+
+		  $0 -n 5 -s https://spektra.asmussen.tech -a https://spektra.asmussen.tech
+
 		Anything after -- goes to every emulator, so the fleet's shape is set
 		there rather than duplicated here:
 
@@ -115,6 +120,44 @@ site_for() {
 	}'
 }
 
+declare -A WORDS=(
+	[b]="barsk blid bred brun brat bitter|bæver bakke bølge birk brise bogfink"
+	[d]="dyb dristig doven dunkel dyster drøj|drossel dal due drage dyne dæmning"
+	[f]="fin flink fri frisk fast fattig|fyr falk fjord fasan flod fugl"
+	[g]="glad grøn grå grov gammel gæv|gedde grævling gøg granit gran gås"
+	[h]="hurtig høj hård hvid hul herlig|hejre hare havn hassel hugorm høg"
+	[k]="klog kold kort kraftig kvik køn|krage kilde klit kløver kvist kyst"
+	[l]="lang let livlig lav lys lun|lærke lyng laks lind lygte løve"
+	[m]="mild mørk munter modig mager mæt|mose måge mus mark mølle morgen"
+	[n]="nem ny nordlig nænsom nøgen nyttig|natugle nælde nød natravn nattergal nøgle"
+	[r]="rank rap rolig rund rusten rar|ravn rede rype rose ræv rist"
+	[s]="snild stærk stille sort smal sikker|spurv sten sø slette sump stær"
+	[t]="tam tavs tyk tør træt tapper|tjørn tundra tue torn trane tudse"
+	[u]="ung uklar urolig usikker udsat uskyldig|ugle ulv urt udsigt uge urfugl"
+	[v]="vild varm våd vis venlig vågen|vibe vig vinge vinter vase vej"
+)
+
+name_pool() {
+	local letter adjectives nouns adj noun
+
+	for letter in "${!WORDS[@]}"; do
+		IFS='|' read -r adjectives nouns <<<"${WORDS[$letter]}"
+
+		for adj in $adjectives; do
+			for noun in $nouns; do
+				echo "$adj-$noun"
+			done
+		done
+	done
+}
+
+mapfile -t NAMES < <(name_pool | shuf -n "$NUM_NODES")
+
+if [[ ${#NAMES[@]} -lt $NUM_NODES ]]; then
+	echo "name pool holds only ${#NAMES[@]} names; -n $NUM_NODES is too many" >&2
+	exit 1
+fi
+
 pids=()
 
 cleanup() {
@@ -126,14 +169,15 @@ trap cleanup INT TERM EXIT
 
 for ((i = 1; i <= NUM_NODES; i++)); do
 	IDENTITY="$(random_identity)"
+	NAME="${NAMES[$((i - 1))]}"
 	read -r LAT LON <<<"$(site_for "$((i - 1))")"
 
-	if ! TOKEN="$(plan_node "node-$i" "$LAT" "$LON")" || [[ -z "$TOKEN" ]]; then
-		echo "could not plan node-$i through $API" >&2
+	if ! TOKEN="$(plan_node "$NAME" "$LAT" "$LON")" || [[ -z "$TOKEN" ]]; then
+		echo "could not plan $NAME through $API" >&2
 		exit 1
 	fi
 
-	"$BIN" --server "$SERVER" --identity "$IDENTITY" --name "node-$i" \
+	"$BIN" --server "$SERVER" --identity "$IDENTITY" --name "$NAME" \
 		--enrollment-token "$TOKEN" \
 		--latitude "$LAT" --longitude "$LON" "${PASSTHROUGH[@]}" &
 	pids+=("$!")
