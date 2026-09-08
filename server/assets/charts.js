@@ -92,6 +92,12 @@
     };
   }
 
+  function bounds(plot) {
+    const xs = plot.data[0];
+
+    return xs.length > 0 ? [xs[0], xs[xs.length - 1]] : null;
+  }
+
   function build(figure, target, series) {
     const colors = palette();
     const count = series.points.at.length;
@@ -107,15 +113,16 @@
 
     const decimals = series.presentation.unit === "%" ? 2 : 1;
     const reset = figure.querySelector("[data-chart-reset]");
-    const full = [series.points.at[0], series.points.at[count - 1]];
 
     const zoomHook = (plot) => {
       if (!reset) {
         return;
       }
 
+      const span = bounds(plot);
       const { min, max } = plot.scales.x;
-      reset.hidden = min <= full[0] && max >= full[1];
+
+      reset.hidden = span === null || (min <= span[0] && max >= span[1]);
     };
 
     const plot = new uPlot(
@@ -170,11 +177,50 @@
     if (reset) {
       reset.hidden = true;
       reset.onclick = () => {
-        plot.setScale("x", { min: full[0], max: full[1] });
+        const span = bounds(plot);
+        if (span) {
+          plot.setScale("x", { min: span[0], max: span[1] });
+        }
       };
     }
 
     return plot;
+  }
+
+  function stop(figure) {
+    const state = drawn.get(figure);
+    if (state?.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+  }
+
+  function refresh(figure, plot) {
+    const seconds = Number(figure.dataset.refresh);
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      return null;
+    }
+
+    const reset = figure.querySelector("[data-chart-reset]");
+
+    return setInterval(async () => {
+      let series;
+      try {
+        const response = await fetch(figure.dataset.series, { credentials: "same-origin" });
+        if (!response.ok) {
+          stop(figure);
+          return;
+        }
+
+        series = await response.json();
+      } catch {
+        return;
+      }
+
+      const zoomed = reset !== null && !reset.hidden;
+
+      plot.setData([series.points.at, series.points.value], !zoomed);
+    }, seconds * 1000);
   }
 
   async function load(figure) {
@@ -212,7 +258,9 @@
 
     const plot = build(figure, target, series);
     if (plot) {
-      drawn.set(figure, { plot, series });
+      const entry = { plot, series };
+      drawn.set(figure, entry);
+      entry.timer = refresh(figure, plot);
     }
   }
 
@@ -261,6 +309,7 @@
     for (const figure of document.querySelectorAll("figure[data-series]")) {
       const state = drawn.get(figure);
       if (state) {
+        stop(figure);
         state.plot.destroy();
         drawn.delete(figure);
       }

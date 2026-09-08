@@ -166,6 +166,42 @@ pub struct AdminTemplate {
     pub live: bool,
 }
 
+#[derive(Template)]
+#[template(path = "drift.html")]
+pub struct DriftTemplate {
+    pub nodes_total: usize,
+    pub silent: usize,
+    pub open_alarms: i64,
+    pub open_orders: i64,
+    pub user_name: String,
+    pub user_role: String,
+    pub live: bool,
+}
+
+#[derive(Template)]
+#[template(path = "fragments/ops_tiles.html")]
+pub struct OpsTilesFragment {
+    pub healthy: bool,
+    pub problems: Vec<String>,
+    pub window_seconds: i64,
+    pub measurements: String,
+    pub health: String,
+    pub rejected: String,
+    pub failed: String,
+    pub http_requests: String,
+    pub http_server_errors: String,
+    pub http_mean_ms: String,
+    pub http_slowest_ms: String,
+    pub pool_size: usize,
+    pub pool_available: usize,
+    pub pool_waiting: usize,
+    pub measurements_total: u64,
+    pub registrations: u64,
+    pub alarms_raised: u64,
+    pub last_ingest: Stamp,
+    pub last_detection: Stamp,
+}
+
 /// A move an operator or technician may make on an alarm.
 #[derive(Debug, Clone, Copy)]
 pub struct Transition {
