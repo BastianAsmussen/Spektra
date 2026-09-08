@@ -146,6 +146,8 @@
             cargoNextestExtraArgs = "--workspace";
             nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.postgresql_18 ];
             preCheck = postgresFixture;
+
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
           }
         );
       };

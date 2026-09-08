@@ -27,7 +27,6 @@
     {
       config,
       lib,
-      pkgs,
       ...
     }:
     let
@@ -163,15 +162,9 @@
         ];
 
         sops = {
-          defaultSopsFile = ./secrets/spektra.yaml;
           age.sshKeyPaths = [ "/etc/ssh/ssh_host_ed25519_key" ];
 
           secrets = {
-            deploy_ssh_key = {
-              owner = "deploy";
-              mode = "0400";
-            };
-
             spektra_env = {
               format = "binary";
               sopsFile = ./secrets/spektra.env;
@@ -180,19 +173,6 @@
             };
           };
         };
-
-        programs.ssh = {
-          knownHosts."github.com".publicKey =
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl";
-
-          extraConfig = ''
-            Host github.com
-              IdentityFile ${config.sops.secrets.deploy_ssh_key.path}
-              IdentitiesOnly yes
-          '';
-        };
-
-        environment.systemPackages = [ pkgs.gitMinimal ];
 
         nix.settings = {
           experimental-features = [
