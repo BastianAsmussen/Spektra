@@ -6,16 +6,26 @@ SERVER="http://localhost:50051"
 API="http://localhost:8080"
 SESSION="${SPEKTRA_SESSION:-}"
 NUM_NODES=100
+EXISTING=0
+JOBS=32
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$DIR/../target/release/emulator"
 
 usage() {
 	cat >&2 <<-EOF
-		Usage: $0 [-n NUM_NODES] [-s SERVER] [-a API] [-k SESSION] [-- EMULATOR ARGS...]
+		Usage: $0 [-n NUM_NODES] [-e] [-j JOBS] [-s SERVER] [-a API] [-k SESSION] [-- EMULATOR ARGS...]
 
 		Registration is authenticated, so each node is planned through the
 		administration API first and enrols against the key that returns. -k is
 		an administrator's session_token, or set SPEKTRA_SESSION.
+
+		-e drives the nodes already in the directory before planning any new
+		ones, so a rerun tops the fleet up to -n instead of doubling it. Each
+		reused node's credential is rotated, which revokes whatever the real
+		receiver at that site holds.
+
+		-j sets how many nodes are prepared through the API at once, 32 by
+		default.
 
 		Both -s and -a point at the deployment; -a defaults to localhost and
 		is easy to forget when only -s is overridden:
@@ -38,6 +48,14 @@ while [[ $# -gt 0 ]]; do
 	case "$1" in
 	-n | --num)
 		NUM_NODES="$2"
+		shift 2
+		;;
+	-e | --existing)
+		EXISTING=1
+		shift
+		;;
+	-j | --jobs)
+		JOBS="$2"
 		shift 2
 		;;
 	-s | --server)
@@ -87,37 +105,84 @@ random_identity() {
 	od -An -N16 -tx1 /dev/urandom | tr -d ' \n'
 }
 
+existing_nodes() {
+	curl -fsS "$API/api/nodes" -H "authorization: Bearer $SESSION" |
+		jq -r --argjson n "$NUM_NODES" '
+			[.[] | select(.suspended | not)][:$n][]
+			| [.id, (.external_identity // ""), .name,
+			   (.latitude // 57.05), (.longitude // 9.92)]
+			| @tsv'
+}
+
+rotate_credential() {
+	curl -fsS -X POST "$API/api/nodes/$1/credential" \
+		-H "authorization: Bearer $SESSION" |
+		jq -r '.credential'
+}
+
+prepare_node() {
+	local kind key name lat lon identity token
+
+	IFS=$'\t' read -r kind key name lat lon identity <<<"$1"
+
+	if [[ $kind == reuse ]]; then
+		token=$(rotate_credential "$key" 2>/dev/null) || token=""
+	else
+		token=$(plan_node "$name" "$lat" "$lon" 2>/dev/null) || token=""
+	fi
+
+	if [[ -z $token ]]; then
+		printf 'could not %s %s through %s\n' "$kind" "$name" "$API" >&2
+
+		return 1
+	fi
+
+	printf '%s\t%s\t%s\t%s\t%s\n' "$identity" "$name" "$lat" "$lon" "$token"
+}
+
 SITES=(
-	"57.048 9.921"    # Aalborg
-	"56.162 10.204"   # Aarhus
-	"55.396 10.389"   # Odense
-	"55.676 12.569"   # København
-	"55.471 8.452"    # Esbjerg
-	"57.442 10.537"   # Frederikshavn
-	"56.462 9.402"    # Viborg
-	"55.708 9.536"    # Vejle
-	"55.860 9.850"    # Horsens
-	"56.360 8.616"    # Holstebro
-	"55.229 11.761"   # Næstved
-	"54.769 11.874"   # Nykøbing Falster
-	"55.100 14.700"   # Rønne
-	"56.951 8.694"    # Thisted
-	"55.491 9.472"    # Kolding
-	"55.860 12.035"   # Hillerød
+	"57.048 9.921"  # Aalborg
+	"56.162 10.204" # Aarhus
+	"55.396 10.389" # Odense
+	"55.676 12.569" # København
+	"55.471 8.452"  # Esbjerg
+	"57.442 10.537" # Frederikshavn
+	"56.462 9.402"  # Viborg
+	"55.708 9.536"  # Vejle
+	"55.860 9.850"  # Horsens
+	"56.360 8.616"  # Holstebro
+	"55.229 11.761" # Næstved
+	"54.769 11.874" # Nykøbing Falster
+	"55.100 14.700" # Rønne
+	"56.951 8.694"  # Thisted
+	"55.491 9.472"  # Kolding
+	"55.860 12.035" # Hillerød
 )
 
+readonly LAT_MIN=54.56 LAT_MAX=57.75
+readonly LON_MIN=8.07 LON_MAX=15.20
+
+readonly SPREAD_DEG=0.30
+
 site_for() {
-	local index=$1
+	local index=$1 total=$2
 	local site=${SITES[$((index % ${#SITES[@]}))]}
 	local ring=$((index / ${#SITES[@]}))
+	local rings=$(((total - 1) / ${#SITES[@]}))
 
 	read -r lat lon <<<"$site"
-	awk -v lat="$lat" -v lon="$lon" -v ring="$ring" -v n="$index" 'BEGIN {
-		if (ring == 0) { printf "%.5f %.5f\n", lat, lon; exit }
-		angle = n * 2.399963
-		radius = 0.045 * ring
-		printf "%.5f %.5f\n", lat + radius * cos(angle), lon + (radius * sin(angle)) / 0.56
-	}'
+	awk -v lat="$lat" -v lon="$lon" -v ring="$ring" -v rings="$rings" -v n="$index" \
+		-v spread="$SPREAD_DEG" -v latmin="$LAT_MIN" -v latmax="$LAT_MAX" \
+		-v lonmin="$LON_MIN" -v lonmax="$LON_MAX" '
+		function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v) }
+		BEGIN {
+			if (ring == 0 || rings == 0) { printf "%.5f %.5f\n", lat, lon; exit }
+			angle = n * 2.399963
+			radius = spread * sqrt(ring / rings)
+			printf "%.5f %.5f\n",
+				clamp(lat + radius * cos(angle), latmin, latmax),
+				clamp(lon + (radius * sin(angle)) / 0.56, lonmin, lonmax)
+		}'
 }
 
 declare -A WORDS=(
@@ -137,6 +202,29 @@ declare -A WORDS=(
 	[v]="vild varm våd vis venlig vågen|vibe vig vinge vinter vase vej"
 )
 
+cycle() {
+	local count=$1 emitted=0 round=1
+	local -a pool
+
+	mapfile -t pool
+
+	while ((emitted < count)); do
+		for name in "${pool[@]}"; do
+			((emitted < count)) || break
+
+			if ((round == 1)); then
+				echo "$name"
+			else
+				echo "$name-$round"
+			fi
+
+			emitted=$((emitted + 1))
+		done
+
+		round=$((round + 1))
+	done
+}
+
 name_pool() {
 	local letter adjectives nouns adj noun
 
@@ -151,11 +239,16 @@ name_pool() {
 	done
 }
 
-mapfile -t NAMES < <(name_pool | shuf -n "$NUM_NODES")
+ROWS=()
 
-if [[ ${#NAMES[@]} -lt $NUM_NODES ]]; then
-	echo "name pool holds only ${#NAMES[@]} names; -n $NUM_NODES is too many" >&2
-	exit 1
+if ((EXISTING)); then
+	mapfile -t ROWS < <(existing_nodes)
+fi
+
+FRESH=$((NUM_NODES - ${#ROWS[@]}))
+
+if ((FRESH > 0)); then
+	mapfile -t NAMES < <(name_pool | shuf | cycle "$FRESH")
 fi
 
 pids=()
@@ -167,21 +260,42 @@ cleanup() {
 }
 trap cleanup INT TERM EXIT
 
+WORK="$(mktemp)"
+TABLE="$(mktemp)"
+trap 'rm -f "$WORK" "$TABLE"' EXIT
+
 for ((i = 1; i <= NUM_NODES; i++)); do
-	IDENTITY="$(random_identity)"
-	NAME="${NAMES[$((i - 1))]}"
-	read -r LAT LON <<<"$(site_for "$((i - 1))")"
+	if ((i <= ${#ROWS[@]})); then
+		IFS=$'\t' read -r ID IDENTITY NAME LAT LON <<<"${ROWS[$((i - 1))]}"
+		[[ -n $IDENTITY ]] || IDENTITY="$(random_identity)"
 
-	if ! TOKEN="$(plan_node "$NAME" "$LAT" "$LON")" || [[ -z "$TOKEN" ]]; then
-		echo "could not plan $NAME through $API" >&2
-		exit 1
+		printf 'reuse\t%s\t%s\t%s\t%s\t%s\n' "$ID" "$NAME" "$LAT" "$LON" "$IDENTITY"
+	else
+		NAME="${NAMES[$((i - 1 - ${#ROWS[@]}))]}"
+		read -r LAT LON <<<"$(site_for "$((i - 1))" "$NUM_NODES")"
+
+		printf 'plan\t-\t%s\t%s\t%s\t%s\n' "$NAME" "$LAT" "$LON" "$(random_identity)"
 	fi
+done >"$WORK"
 
+export -f prepare_node plan_node rotate_credential
+export API SESSION
+
+xargs -d '\n' -n 1 -P "$JOBS" -a "$WORK" \
+	bash -c 'for line; do prepare_node "$line"; done' _ >"$TABLE"
+
+PLANNED=$(wc -l <"$TABLE")
+if ((PLANNED < NUM_NODES)); then
+	echo "only $PLANNED of $NUM_NODES nodes could be prepared through $API" >&2
+	exit 1
+fi
+
+while IFS=$'\t' read -r IDENTITY NAME LAT LON TOKEN; do
 	"$BIN" --server "$SERVER" --identity "$IDENTITY" --name "$NAME" \
 		--enrollment-token "$TOKEN" \
 		--latitude "$LAT" --longitude "$LON" "${PASSTHROUGH[@]}" &
 	pids+=("$!")
-done
+done <"$TABLE"
 
 echo "Started $NUM_NODES nodes against $SERVER."
 
