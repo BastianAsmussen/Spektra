@@ -137,6 +137,9 @@ async fn run(
     window.tick().await;
     health.tick().await;
 
+    let delivery = tokio::time::sleep(client.delivery_delay().unwrap_or(config.window));
+    tokio::pin!(delivery);
+
     loop {
         tokio::select! {
             event = events.recv() => match event {
@@ -150,9 +153,15 @@ async fn run(
                     return;
                 }
             },
-            _ = window.tick() => {
-                close_window(aggregator, buffer);
+            _ = window.tick() => close_window(aggregator, buffer),
+            () = delivery.as_mut() => {
                 deliver(client, buffer).await;
+
+                let next = client.delivery_delay().unwrap_or(config.window);
+                let at = tokio::time::Instant::now()
+                    .checked_add(next)
+                    .unwrap_or_else(tokio::time::Instant::now);
+                delivery.as_mut().reset(at);
             }
             _ = health.tick() => {
                 if let Err(err) = client.report_health(Health::read()).await {

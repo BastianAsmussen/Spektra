@@ -1,3 +1,5 @@
+// Spektra v1 node registration. Returns a bearer credential.
+
 syntax = "proto3";
 
 package spektra.v1;
@@ -34,6 +36,7 @@ message Capabilities {
 message NodeRegistrationRequest {
   // Must be "1" for the spektra.v1 service.
   string protocol_version = 1;
+  // Stable across reboots. Known identity -> ALREADY_EXISTS.
   string identity = 2;
   // Human-readable (not an identifier).
   string name = 3;
@@ -47,6 +50,10 @@ message NodeRegistrationResponse {
   string protocol_version = 1;
   // Server-assigned node id, stable for the lifetime of the node.
   int64 node_id = 2;
+  // Bearer credential for later calls (`authorization` metadata).
   string credential = 3;
+  // Server clock: Node derives clock offset for health reports from this.
   google.protobuf.Timestamp server_time = 4;
+  // First delivery schedule, absent means own cadence.
+  ReportSchedule schedule = 5;
 }

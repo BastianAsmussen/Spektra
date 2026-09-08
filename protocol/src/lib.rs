@@ -1,5 +1,3 @@
-use std::ops::RangeInclusive;
-
 #[expect(
     clippy::allow_attributes,
     clippy::as_conversions,
@@ -17,6 +15,9 @@ pub mod v1 {
     tonic::include_proto!("spektra.v1");
 }
 
+use std::ops::RangeInclusive;
+use std::time::Duration;
+
 pub const PROTOCOL_VERSION: &str = "1";
 
 #[must_use]
@@ -27,5 +28,67 @@ pub const fn metric_range(metric: v1::Metric) -> Option<RangeInclusive<f64>> {
         v1::Metric::CarrierOffset => Some(-200_000.0..=200_000.0),
         v1::Metric::DemodErrorRate | v1::Metric::SpectrumOccupancy => Some(0.0..=1.0),
         v1::Metric::Unspecified => None,
+    }
+}
+
+pub const MAX_DEFERRAL: Duration = Duration::from_mins(5);
+
+#[must_use]
+pub fn schedule_delay(
+    schedule: Option<&v1::ReportSchedule>,
+    server_time: Option<&prost_types::Timestamp>,
+) -> Option<Duration> {
+    let next = schedule?.next_report_at.as_ref()?;
+    let issued = server_time?;
+
+    let seconds = next.seconds.saturating_sub(issued.seconds);
+    let nanos = i64::from(next.nanos).saturating_sub(i64::from(issued.nanos));
+    let total = seconds
+        .saturating_mul(1_000_000_000)
+        .saturating_add(nanos)
+        .max(0);
+
+    Some(Duration::from_nanos(u64::try_from(total).unwrap_or(0)).min(MAX_DEFERRAL))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stamp(seconds: i64) -> prost_types::Timestamp {
+        prost_types::Timestamp { seconds, nanos: 0 }
+    }
+
+    fn schedule(seconds: i64) -> v1::ReportSchedule {
+        v1::ReportSchedule {
+            next_report_at: Some(stamp(seconds)),
+        }
+    }
+
+    #[test]
+    fn a_schedule_is_the_gap_between_the_two_stamps() {
+        let delay = schedule_delay(Some(&schedule(1_000_042)), Some(&stamp(1_000_000)));
+
+        assert_eq!(delay, Some(Duration::from_secs(42)));
+    }
+
+    #[test]
+    fn a_schedule_in_the_past_means_now() {
+        let delay = schedule_delay(Some(&schedule(999_000)), Some(&stamp(1_000_000)));
+
+        assert_eq!(delay, Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn an_absurd_schedule_is_capped() {
+        let delay = schedule_delay(Some(&schedule(i64::MAX)), Some(&stamp(1_000_000)));
+
+        assert_eq!(delay, Some(MAX_DEFERRAL));
+    }
+
+    #[test]
+    fn a_missing_schedule_leaves_the_caller_alone() {
+        assert_eq!(schedule_delay(None, Some(&stamp(1_000_000))), None);
+        assert_eq!(schedule_delay(Some(&schedule(1_000_042)), None), None);
     }
 }

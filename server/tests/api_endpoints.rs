@@ -386,6 +386,13 @@ async fn register_node_creates_node_and_credential() {
     assert_eq!(response.protocol_version, "1");
     assert!(!response.credential.is_empty());
 
+    let delay = protocol::schedule_delay(response.schedule.as_ref(), response.server_time.as_ref())
+        .expect("registration carries a report schedule");
+    assert!(
+        delay > std::time::Duration::ZERO && delay <= std::time::Duration::from_mins(1),
+        "the first delivery was scheduled {delay:?} out"
+    );
+
     let node_id = response.node_id;
     let conn = pool.get().await.expect("connection");
     let stored = conn

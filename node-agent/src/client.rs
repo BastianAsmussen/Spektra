@@ -1,5 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use protocol::schedule_delay;
 use protocol::v1::node_ingest_client::NodeIngestClient;
 use protocol::v1::{
     Capabilities, ChannelPlan, ChannelPlanRequest, Hardware, HealthReport, IngestAck, Location,
@@ -75,6 +76,7 @@ pub struct Client {
     inner: NodeIngestClient<Channel>,
     credential: Option<String>,
     clock_offset_seconds: f64,
+    delivery_delay: Option<Duration>,
 }
 
 impl Client {
@@ -101,6 +103,7 @@ impl Client {
             inner: NodeIngestClient::new(channel),
             credential: None,
             clock_offset_seconds: 0.0,
+            delivery_delay: None,
         })
     }
 
@@ -108,6 +111,12 @@ impl Client {
     #[must_use]
     pub const fn clock_offset_seconds(&self) -> f64 {
         self.clock_offset_seconds
+    }
+
+    /// What the server last asked this node to wait before delivering.
+    #[must_use]
+    pub const fn delivery_delay(&self) -> Option<Duration> {
+        self.delivery_delay
     }
 
     /// Load the stored identity, or register this node and store one.
@@ -167,6 +176,8 @@ impl Client {
             .into_inner();
 
         self.observe_server_time(response.server_time.as_ref());
+        self.delivery_delay =
+            schedule_delay(response.schedule.as_ref(), response.server_time.as_ref());
 
         let registered = Identity {
             identity: value,
@@ -194,6 +205,7 @@ impl Client {
         let ack = self.inner.submit_measurements(request).await?.into_inner();
 
         self.observe_server_time(ack.server_time.as_ref());
+        self.delivery_delay = schedule_delay(ack.schedule.as_ref(), ack.server_time.as_ref());
 
         Ok(ack)
     }

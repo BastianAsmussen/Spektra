@@ -4,12 +4,12 @@ pub mod validate;
 use std::net::SocketAddr;
 use std::time::SystemTime;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use diesel::prelude::*;
 use protocol::v1::node_ingest_server::{NodeIngest, NodeIngestServer};
 use protocol::v1::{
     ChannelAssignment, ChannelPlan, ChannelPlanRequest, HealthAck, HealthReport, IngestAck,
-    MeasurementReport, NodeRegistrationRequest, NodeRegistrationResponse,
+    MeasurementReport, NodeRegistrationRequest, NodeRegistrationResponse, ReportSchedule,
 };
 use rand::RngExt;
 use serde_json::json;
@@ -19,6 +19,26 @@ use tonic::{Request, Response, Status};
 use crate::db::schema::node_credentials as credentials_schema;
 use crate::db::schema::nodes as nodes_schema;
 use crate::state::{AppState, NodeEvent};
+
+const SLOT_CYCLE_MS: i64 = 60_000;
+
+const SLOT_SPREAD: i64 = 2_654_435_761;
+
+///
+fn report_schedule(node_id: i64, now: DateTime<Utc>) -> Option<ReportSchedule> {
+    let millis = now.timestamp_millis();
+    let slot = node_id.wrapping_mul(SLOT_SPREAD).rem_euclid(SLOT_CYCLE_MS);
+    let cycle_start = millis.saturating_sub(millis.rem_euclid(SLOT_CYCLE_MS));
+
+    let mut next = cycle_start.saturating_add(slot);
+    if next <= millis {
+        next = next.saturating_add(SLOT_CYCLE_MS);
+    }
+
+    Some(ReportSchedule {
+        next_report_at: Some(SystemTime::from(DateTime::from_timestamp_millis(next)?).into()),
+    })
+}
 
 /// The v1 ingest service.
 ///
@@ -300,6 +320,7 @@ impl Ingest {
             node_id,
             credential,
             server_time: Some(SystemTime::now().into()),
+            schedule: report_schedule(node_id, Utc::now()),
         }))
     }
 
@@ -333,6 +354,7 @@ impl Ingest {
             protocol_version: validate::PROTOCOL_VERSION.to_owned(),
             server_time: Some(SystemTime::now().into()),
             accepted_channels,
+            schedule: report_schedule(node_id, Utc::now()),
         }))
     }
 
@@ -394,5 +416,79 @@ impl Ingest {
             channels,
             issued_at: Some(SystemTime::now().into()),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn slot_ms(node_id: i64, now: DateTime<Utc>) -> i64 {
+        let schedule = report_schedule(node_id, now).expect("a schedule");
+        let at = schedule.next_report_at.expect("an instant");
+        let millis = at
+            .seconds
+            .saturating_mul(1_000)
+            .saturating_add(i64::from(at.nanos) / 1_000_000);
+
+        millis.rem_euclid(SLOT_CYCLE_MS)
+    }
+
+    fn at(millis: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(1_772_000_000_000_i64.saturating_add(millis))
+            .expect("a real time")
+    }
+
+    #[test]
+    fn a_node_always_lands_on_its_own_slot() {
+        let expected = slot_ms(7, at(0));
+
+        for offset in (0..SLOT_CYCLE_MS).step_by(997) {
+            assert_eq!(slot_ms(7, at(offset)), expected);
+        }
+    }
+
+    #[test]
+    fn a_fleet_of_sequential_ids_spreads_over_the_whole_cycle() {
+        let fleet = 7_200_i64;
+        let now = at(0);
+
+        let mut slots: Vec<i64> = (1..=fleet).map(|id| slot_ms(id, now)).collect();
+        slots.sort_unstable();
+        slots.dedup();
+
+        assert_eq!(slots.len(), 7_200, "ids collided on a slot");
+
+        let ideal = SLOT_CYCLE_MS / fleet;
+        let widest = slots
+            .windows(2)
+            .filter_map(|pair| match pair {
+                [before, after] => Some(after.saturating_sub(*before)),
+                _ => None,
+            })
+            .max()
+            .expect("a gap");
+
+        assert!(
+            widest <= ideal.saturating_mul(4),
+            "widest gap {widest} ms against an ideal spacing of {ideal} ms"
+        );
+    }
+
+    #[test]
+    fn the_next_report_is_always_ahead_and_within_one_cycle() {
+        for node_id in 0..500_i64 {
+            let now = at(node_id.saturating_mul(37));
+            let schedule = report_schedule(node_id, now).expect("a schedule");
+            let at = schedule.next_report_at.expect("an instant");
+            let millis = at
+                .seconds
+                .saturating_mul(1_000)
+                .saturating_add(i64::from(at.nanos) / 1_000_000);
+            let delay = millis.saturating_sub(now.timestamp_millis());
+
+            assert!(delay > 0, "node {node_id} was told to report in the past");
+            assert!(delay <= SLOT_CYCLE_MS, "node {node_id} waits {delay} ms");
+        }
     }
 }
