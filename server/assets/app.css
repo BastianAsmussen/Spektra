@@ -216,6 +216,12 @@ main div:has(> #work-orders:target) {
   height: clamp(9rem, 20vh, 14rem);
 }
 
+/* Scoped for specificity: vendored `uplot.css` loads later; its rgba(0,0,0,0.07) is invisible on Mocha. */
+.uplot .u-select {
+  background: color-mix(in srgb, var(--ctp-blue) 28%, transparent);
+  border: 1px solid var(--ctp-blue);
+}
+
 .leaflet-container {
   font: inherit;
   background: var(--ctp-crust);

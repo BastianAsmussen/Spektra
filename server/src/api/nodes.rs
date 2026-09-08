@@ -496,13 +496,19 @@ fn uptime_words(seconds: f64) -> String {
     let hours = ((total / 60.0) % 24.0).floor();
     let minutes = (total % 60.0).floor();
 
-    if days >= 1.0 {
-        format!("{days:.0} d {hours:.0} t")
+    let parts: Vec<String> = if days >= 1.0 {
+        [(days, "d"), (hours, "t")]
     } else if hours >= 1.0 {
-        format!("{hours:.0} t {minutes:.0} m")
+        [(hours, "t"), (minutes, "m")]
     } else {
-        format!("{minutes:.0} m")
+        return format!("{minutes:.0}m");
     }
+    .into_iter()
+    .filter(|&(value, _)| value >= 1.0)
+    .map(|(value, unit)| format!("{value:.0}{unit}"))
+    .collect();
+
+    parts.join(" ")
 }
 
 struct Sample {
