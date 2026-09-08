@@ -123,6 +123,13 @@
         services.postgresql = mkIf cfg.database.createLocally {
           enable = true;
           package = pkgs.postgresql_18;
+
+          settings = {
+            max_wal_size = "8GB";
+            shared_buffers = "2GB";
+            effective_cache_size = "6GB";
+          };
+
           ensureDatabases = [ cfg.database.name ];
           ensureUsers = [
             {

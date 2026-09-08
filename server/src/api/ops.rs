@@ -76,7 +76,7 @@ pub async fn get_status(
         .await??;
     let fleet_size = u64::try_from(fleet).unwrap_or(0);
 
-    let metrics = state.metrics.snapshot(&state.pool);
+    let metrics = state.metrics.snapshot(&state.ingest_pool);
     let problems = metrics.problems(chrono::Utc::now().naive_utc(), fleet_size);
 
     Ok(Json(OpsStatus {
@@ -151,7 +151,7 @@ async fn tiles(auth: AuthPage, State(state): State<AppState>) -> Result<Html<Str
         .await??;
     let fleet_size = u64::try_from(fleet).unwrap_or(0);
 
-    let metrics = state.metrics.snapshot(&state.pool);
+    let metrics = state.metrics.snapshot(&state.ingest_pool);
     let rates = state.metrics.rates();
     let problems = metrics.problems(chrono::Utc::now().naive_utc(), fleet_size);
 

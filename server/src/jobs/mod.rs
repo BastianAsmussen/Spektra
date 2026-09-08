@@ -4,7 +4,7 @@ pub mod rollup;
 
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Days, Utc};
 use deadpool_diesel::postgres::Pool;
 
 use crate::notify::{Notice, Ntfy};
@@ -19,7 +19,8 @@ const DETECTION_INTERVAL: Duration = Duration::from_mins(1);
 ///
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
-const PARTITIONS_AHEAD: u32 = 2;
+/// Days of partitions kept ahead of the current one.
+const PARTITIONS_AHEAD: u64 = 7;
 
 ///
 const RAW_RETENTION_DAYS: u64 = 14;
@@ -35,7 +36,7 @@ pub async fn run(state: AppState) {
     loop {
         timer.tick().await;
 
-        match once(&state.pool).await {
+        match once(&state.ingest_pool).await {
             Ok(()) => state.metrics.maintenance_finished(),
             Err(err) => tracing::error!(error = %err, "the maintenance pass failed"),
         }
@@ -51,7 +52,15 @@ pub async fn once(pool: &Pool) -> Result<(), String> {
     let conn = pool.get().await.map_err(|err| err.to_string())?;
     conn.interact(move |conn| {
         let today = partitions::today();
-        match partitions::ensure_ahead(conn, today, PARTITIONS_AHEAD) {
+
+        let first = today
+            .checked_sub_days(Days::new(RAW_RETENTION_DAYS))
+            .unwrap_or(today);
+        let last = today
+            .checked_add_days(Days::new(PARTITIONS_AHEAD))
+            .unwrap_or(today);
+
+        match partitions::ensure_range(conn, first, last) {
             Ok(created) if !created.is_empty() => {
                 tracing::info!(?created, "measurement partitions created");
             }
@@ -95,7 +104,11 @@ pub async fn detect(state: AppState, notifier: Option<Ntfy>) {
 /// # Errors
 ///
 pub async fn detect_once(state: &AppState, notifier: Option<&Ntfy>) -> Result<(), String> {
-    let conn = state.pool.get().await.map_err(|err| err.to_string())?;
+    let conn = state
+        .ingest_pool
+        .get()
+        .await
+        .map_err(|err| err.to_string())?;
 
     let (deviations, silences) = conn
         .interact(move |conn| {
@@ -176,7 +189,7 @@ async fn publish(
 }
 
 async fn raised_notices(state: &AppState, ids: Vec<i64>) -> Vec<Notice> {
-    let conn = match state.pool.get().await {
+    let conn = match state.ingest_pool.get().await {
         Ok(conn) => conn,
         Err(err) => {
             tracing::error!(error = %err, "could not read back the raised alarms");
@@ -290,14 +303,12 @@ fn prune(conn: &mut diesel::pg::PgConnection) {
             Err(err) => tracing::error!(error = %err, "could not prune raw measurements"),
         }
 
-        if let Some(date) = before.date().checked_sub_months(chrono::Months::new(1)) {
-            match partitions::drop_before(conn, date) {
-                Ok(dropped) if !dropped.is_empty() => {
-                    tracing::info!(?dropped, "empty measurement partitions dropped");
-                }
-                Ok(_) => {}
-                Err(err) => tracing::error!(error = %err, "could not drop old partitions"),
+        match partitions::drop_before(conn, before.date()) {
+            Ok(dropped) if !dropped.is_empty() => {
+                tracing::info!(?dropped, "empty measurement partitions dropped");
             }
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = %err, "could not drop old partitions"),
         }
     }
 

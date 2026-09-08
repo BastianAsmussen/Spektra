@@ -16,6 +16,10 @@ pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/");
 
 const DEFAULT_STATIC_DIR: &str = "server/assets/dist";
 
+const WEB_POOL_SIZE: usize = 4;
+
+const INGEST_POOL_SIZE: usize = 8;
+
 #[derive(OpenApi)]
 #[openapi(
     paths(
@@ -111,10 +115,9 @@ async fn main() -> Result<()> {
     let db_url =
         std::env::var("DATABASE_URL").wrap_err("DATABASE_URL environment variable is not set!")?;
 
-    let manager = deadpool_diesel::postgres::Manager::new(db_url, deadpool_diesel::Runtime::Tokio1);
-    let pool = deadpool_diesel::postgres::Pool::builder(manager)
-        .build()
-        .wrap_err("Failed to build database connection pool!")?;
+    let pool = build_pool(&db_url, WEB_POOL_SIZE).wrap_err("Failed to build the web pool!")?;
+    let ingest_pool =
+        build_pool(&db_url, INGEST_POOL_SIZE).wrap_err("Failed to build the ingest pool!")?;
 
     {
         let conn = pool
@@ -136,7 +139,7 @@ async fn main() -> Result<()> {
         Err(err) => tracing::error!(error = %err, "could not create the administrator"),
     }
 
-    let state = AppState::new(pool);
+    let state = AppState::new(pool).with_ingest_pool(ingest_pool);
 
     tokio::spawn(jobs::run(state.clone()));
 
@@ -198,6 +201,18 @@ async fn main() -> Result<()> {
     tracing::info!("Server shut down gracefully.");
 
     Ok(())
+}
+
+fn build_pool(db_url: &str, size: usize) -> Result<deadpool_diesel::postgres::Pool> {
+    let manager = deadpool_diesel::postgres::Manager::new(
+        db_url.to_owned(),
+        deadpool_diesel::Runtime::Tokio1,
+    );
+
+    deadpool_diesel::postgres::Pool::builder(manager)
+        .max_size(size)
+        .build()
+        .map_err(Into::into)
 }
 
 fn static_files() -> ServeDir {
