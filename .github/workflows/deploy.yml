@@ -10,30 +10,58 @@ jobs:
   deploy:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      contents: read
+      actions: write
 
     steps:
-      - name: deploy to NixOS server
-        uses: appleboy/ssh-action@v1
-        env:
-          DEPLOY_DIR: ${{ secrets.DEPLOY_DIR }}
+      - uses: actions/checkout@v4
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          envs: DEPLOY_DIR
-          script: |
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: nixbuild/nix-quick-install-action@v35
+        with:
+          nix_conf: |
+            keep-env-derivations = true
+            keep-outputs = true
+
+      - name: nix store cache
+        uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', 'flake.lock', '**/Cargo.toml', 'Cargo.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
+
+      - name: build system closure
+        run: nix build --print-build-logs .#nixosConfigurations.spektra.config.system.build.toplevel
+
+      - name: configure ssh
+        env:
+          SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+          SERVER_HOST_KEY: ${{ secrets.SERVER_HOST_KEY }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SERVER_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$SERVER_HOST_KEY" > ~/.ssh/known_hosts
+
+      - name: copy and activate
+        env:
+          TARGET: ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}
+        run: |
+          set -euo pipefail
+          system="$(readlink -f result)"
+
+          nix copy -s \
+            --to "ssh://$TARGET?remote-program=/run/current-system/sw/bin/nix-store" \
+            "$system"
+
+          ssh "$TARGET" "
             set -e
-
-            export PATH=/run/wrappers/bin:/run/current-system/sw/bin:$PATH
-
-            REPO_DIR="${DEPLOY_DIR:-$HOME/spektra}"
-            if [ ! -d "$REPO_DIR" ]; then
-              git clone git@github.com:${{ github.repository }}.git "$REPO_DIR"
-            fi
-
-            cd "$REPO_DIR"
-            git fetch origin master
-            git reset --hard FETCH_HEAD
-
-            sudo nixos-rebuild switch --flake "$REPO_DIR#spektra"
+            export PATH=/run/wrappers/bin:/run/current-system/sw/bin:\$PATH
+            sudo nix-env -p /nix/var/nix/profiles/system --set '$system'
+            sudo '$system/bin/switch-to-configuration' switch
+          "
