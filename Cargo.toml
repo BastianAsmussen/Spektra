@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["protocol", "server", "emulator"]
+members = ["protocol", "node-agent", "server", "emulator"]
 
 [workspace.metadata.crane]
 name = "spektra"
