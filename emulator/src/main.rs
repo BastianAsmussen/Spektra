@@ -14,7 +14,7 @@ use signal::{Sample, Signal};
 use tokio::task::JoinSet;
 use tonic::Request;
 use tonic::metadata::MetadataMap;
-use tonic::transport::Channel;
+use tonic::transport::{Channel, ClientTlsConfig};
 
 const PLAN: [(u64, Modulation, &str); 6] = [
     (89_700_000, Modulation::Fm, "DR P4 Nordjylland"),
@@ -200,6 +200,8 @@ async fn main() -> Result<()> {
 
     let channel = Channel::from_shared(args.server.clone())
         .wrap_err_with(|| format!("invalid server address '{}'", args.server))?
+        .tls_config(ClientTlsConfig::new().with_enabled_roots())
+        .wrap_err("could not configure TLS")?
         .connect()
         .await
         .wrap_err("failed to connect")?;
