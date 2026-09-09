@@ -385,7 +385,7 @@ pub mod fragments {
     use diesel::prelude::*;
 
     use super::{AlarmState, TransitionRequest, alarms_schema, next_states};
-    use crate::api::auth::{AuthPage, AuthUser};
+    use crate::api::auth::AuthPage;
     use crate::api::errors::ApiError;
     use crate::api::visibility::{self, Access};
     use crate::db::models::alarms::Alarm;
@@ -448,14 +448,14 @@ pub mod fragments {
 
     ///
     async fn transition(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Path(id): Path<i64>,
         Form(request): Form<TransitionRequest>,
     ) -> Result<Html<String>, ApiError> {
-        let user_id = auth.session.user_id;
+        let user_id = auth.0.session.user_id;
 
-        drop(super::transition_alarm(auth, State(state.clone()), Path(id), Json(request)).await?);
+        drop(super::transition_alarm(auth.0, State(state.clone()), Path(id), Json(request)).await?);
 
         render(&state, user_id, id).await
     }

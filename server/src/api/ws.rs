@@ -1,18 +1,25 @@
+use std::time::Duration;
+
 use askama::Template;
 use axum::Router;
 use axum::extract::State;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code};
 use axum::response::Response;
 use axum::routing::get;
 use futures_util::sink::SinkExt;
 use futures_util::stream::{SplitSink, StreamExt};
 use tokio::sync::broadcast::error::RecvError;
 
-use super::auth::AuthUser;
+use super::auth::{self, AuthUser};
 use super::errors::ApiError;
 use super::visibility::{self, Visibility};
 use crate::state::{AlarmEvent, AppState, NodeEvent};
 use crate::templates::{AlarmStub, NodeStatusFragment};
+
+const REVALIDATE: Duration = Duration::from_mins(1);
+
+/// Close reason the browser matches on to send the reader to the login form.
+pub const SESSION_ENDED: &str = "session-expired";
 
 /// All routes serving the live channel.
 pub fn routes() -> Router<AppState> {
@@ -25,14 +32,18 @@ async fn upgrade(
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     let access = visibility::resolve(&state, auth.session.user_id).await?;
+    let token = auth.session.token;
 
-    Ok(ws.on_upgrade(move |socket| run(socket, state, access.visibility)))
+    Ok(ws.on_upgrade(move |socket| run(socket, state, access.visibility, token)))
 }
 
-async fn run(socket: WebSocket, state: AppState, visibility: Visibility) {
+async fn run(socket: WebSocket, state: AppState, visibility: Visibility, token: String) {
     let (mut sender, mut receiver) = socket.split();
     let mut node_events = state.node_events.subscribe();
     let mut alarm_events = state.alarm_events.subscribe();
+
+    let mut revalidate = tokio::time::interval(REVALIDATE);
+    revalidate.tick().await;
 
     loop {
         tokio::select! {
@@ -68,6 +79,18 @@ async fn run(socket: WebSocket, state: AppState, visibility: Visibility) {
                 }
                 Err(RecvError::Closed) => break,
             },
+
+            _ = revalidate.tick() => {
+                if !auth::session_is_live(&state, &token).await {
+                    tracing::info!("the session behind an open socket ended, closing it");
+                    drop(sender.send(Message::Close(Some(CloseFrame {
+                        code: close_code::NORMAL,
+                        reason: SESSION_ENDED.into(),
+                    }))).await);
+
+                    break;
+                }
+            }
         }
     }
 }

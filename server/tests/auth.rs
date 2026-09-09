@@ -13,8 +13,7 @@ use axum::{Router, response::Response};
 use diesel::prelude::*;
 use http_body_util::BodyExt as _;
 use server::api::{alarms, auth, pages};
-use server::db::models::users::NewUser;
-use server::db::schema::{sessions as sessions_schema, users as users_schema};
+use server::db::schema::sessions as sessions_schema;
 use server::state::AppState;
 use tower::ServiceExt as _;
 
@@ -23,27 +22,13 @@ fn app(state: AppState) -> Router {
         .merge(auth::routes())
         .merge(pages::routes())
         .merge(alarms::routes())
+        .merge(alarms::fragments::routes())
         .with_state(state)
 }
 
 async fn seed_user(pool: &Pool, email: &str, password: &str) -> i64 {
-    let conn = pool.get().await.expect("seed connection");
-    let new_user = NewUser {
-        email: email.to_owned(),
-        password_hash: auth::hash_password(password).expect("a hash"),
-        full_name: "Test User".to_owned(),
-        role_id: 1,
-    };
-
-    conn.interact(move |conn| {
-        diesel::insert_into(users_schema::table)
-            .values(&new_user)
-            .returning(users_schema::id)
-            .get_result(conn)
-    })
-    .await
-    .expect("seed interact failed")
-    .expect("seed user failed")
+    let hash = auth::hash_password(password).expect("a hash");
+    common::seed_user(pool, email, "Test User", 1, &hash).await
 }
 
 async fn post_login(state: &AppState, email: &str, password: &str) -> Response {
@@ -385,4 +370,69 @@ async fn the_administrator_is_created_once_and_not_again() {
         std::env::remove_var("SPEKTRA_ADMIN_EMAIL");
         std::env::remove_var("SPEKTRA_ADMIN_PASSWORD");
     }
+}
+
+#[tokio::test]
+async fn an_expired_session_redirects_an_htmx_fragment_instead_of_feeding_it_the_form() {
+    let pool = test_pool("auth", "htmx_redirect").await;
+    let state = AppState::new(pool);
+    let router = app(state);
+
+    let fragment = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/fragments/alarms")
+                .header("hx-request", "true")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(fragment.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        fragment
+            .headers()
+            .get("hx-redirect")
+            .and_then(|value| value.to_str().ok()),
+        Some("/login")
+    );
+    assert!(
+        fragment.headers().get("location").is_none(),
+        "a redirect htmx would follow is still on the response"
+    );
+
+    let body = fragment
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert!(body.is_empty(), "the login page was sent anyway");
+}
+
+#[tokio::test]
+async fn a_browser_asking_for_the_same_fragment_still_gets_the_redirect() {
+    let pool = test_pool("auth", "browser_redirect").await;
+    let state = AppState::new(pool);
+
+    let response = app(state)
+        .oneshot(
+            Request::builder()
+                .uri("/fragments/alarms")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/login")
+    );
 }

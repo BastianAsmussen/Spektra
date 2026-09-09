@@ -4,6 +4,7 @@ use argon2::password_hash::{PasswordHasher as _, PasswordVerifier as _};
 use askama::Template;
 use axum::extract::{FromRequestParts, OptionalFromRequestParts, State};
 use axum::http::request::Parts;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Form, Router};
@@ -76,7 +77,7 @@ impl FromRequestParts<AppState> for AuthUser {
     }
 }
 
-///
+/// Same lookup as [`AuthUser`], without rejecting a missing session.
 impl OptionalFromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;
 
@@ -89,6 +90,33 @@ impl OptionalFromRequestParts<AppState> for AuthUser {
             Err(ApiError::Unauthorized(_)) => Ok(None),
             Err(other) => Err(other),
         }
+    }
+}
+
+/// Whether a session token still resolves to a live account.
+pub async fn session_is_live(state: &AppState, token: &str) -> bool {
+    let Ok(conn) = state.pool.get().await else {
+        return true;
+    };
+
+    let token = token.to_owned();
+    let found = conn
+        .interact(move |conn| {
+            sessions_schema::table
+                .inner_join(users_schema::table)
+                .filter(sessions_schema::token.eq(&token))
+                .select((sessions_schema::expires_at, users_schema::deactivated))
+                .first::<(chrono::NaiveDateTime, bool)>(conn)
+                .optional()
+        })
+        .await;
+
+    match found {
+        Ok(Ok(Some((expires_at, deactivated)))) => {
+            !deactivated && expires_at >= Utc::now().naive_utc()
+        }
+        Ok(Ok(None)) => false,
+        Ok(Err(_)) | Err(_) => true,
     }
 }
 
@@ -120,32 +148,40 @@ fn extract_token(parts: &Parts) -> Result<String, ApiError> {
 }
 
 /// The authenticated user behind a page request.
-///
 pub struct AuthPage(pub AuthUser);
 
 impl FromRequestParts<AppState> for AuthPage {
-    type Rejection = Redirect;
+    type Rejection = Response;
 
     async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
-        <AuthUser as FromRequestParts<AppState>>::from_request_parts(parts, state)
-            .await
-            .map(Self)
-            .map_err(|_| Redirect::to(LOGIN_PATH))
+        match <AuthUser as FromRequestParts<AppState>>::from_request_parts(parts, state).await {
+            Ok(auth) => Ok(Self(auth)),
+            Err(_) => Err(to_login(&parts.headers)),
+        }
     }
 }
 
 const LOGIN_PATH: &str = "/login";
 
-///
+const HTMX_REQUEST: &str = "hx-request";
+const HTMX_REDIRECT: &str = "hx-redirect";
+
+fn to_login(headers: &HeaderMap) -> Response {
+    if headers.contains_key(HTMX_REQUEST) {
+        return (StatusCode::NO_CONTENT, [(HTMX_REDIRECT, LOGIN_PATH)]).into_response();
+    }
+
+    Redirect::to(LOGIN_PATH).into_response()
+}
+
 const SESSION_HOURS: i64 = 12;
 
 const TOKEN_BYTES: usize = 32;
 
 const ADMIN_EMAIL_ENV: &str = "SPEKTRA_ADMIN_EMAIL";
-
 const ADMIN_PASSWORD_ENV: &str = "SPEKTRA_ADMIN_PASSWORD";
 
 const ADMINISTRATOR_ROLE: i64 = 1;
@@ -164,8 +200,6 @@ pub struct Credentials {
     pub password: String,
 }
 
-///
-///
 async fn login_form(auth: Option<AuthUser>, jar: CookieJar) -> Response {
     if auth.is_some() {
         return Redirect::to("/").into_response();
@@ -189,7 +223,6 @@ fn render_login(error: Option<&str>) -> Response {
     }
 }
 
-///
 async fn login(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -275,8 +308,6 @@ async fn logout(State(state): State<AppState>, jar: CookieJar) -> Result<Respons
     Ok((jar.remove(Cookie::from(COOKIE)), Redirect::to(LOGIN_PATH)).into_response())
 }
 
-///
-///
 fn session_cookie(token: String) -> Cookie<'static> {
     let insecure = std::env::var("SPEKTRA_INSECURE_COOKIES").is_ok_and(|value| value == "1");
 
@@ -292,6 +323,7 @@ fn session_cookie(token: String) -> Cookie<'static> {
 ///
 /// # Errors
 ///
+/// Returns a message if argon2 refuses.
 pub fn hash_password(password: &str) -> Result<String, String> {
     Argon2::default()
         .hash_password(password.as_bytes())
@@ -300,7 +332,6 @@ pub fn hash_password(password: &str) -> Result<String, String> {
 }
 
 /// Whether a password matches a stored PHC string.
-///
 #[must_use]
 pub fn verify(password: &str, hash: &str) -> bool {
     match PasswordHash::new(hash) {
@@ -327,7 +358,6 @@ fn generate_token() -> String {
 }
 
 /// Create the administrator named by the environment, if there are no users.
-///
 ///
 /// # Errors
 ///

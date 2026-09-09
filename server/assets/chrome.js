@@ -199,6 +199,14 @@
   };
 
   document.body.addEventListener("htmx:wsOpen", () => setStatus("forbundet", "text-green"));
-  document.body.addEventListener("htmx:wsClose", () => setStatus("afbrudt", "text-yellow"));
+  document.body.addEventListener("htmx:wsClose", (event) => {
+    if (event.detail.event?.reason === "session-expired") {
+      window.location.assign("/login");
+
+      return;
+    }
+
+    setStatus("afbrudt", "text-yellow");
+  });
   document.body.addEventListener("htmx:wsError", () => setStatus("ikke logget ind", "text-red"));
 })();
