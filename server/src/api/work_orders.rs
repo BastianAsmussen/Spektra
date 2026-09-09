@@ -421,7 +421,7 @@ pub mod fragments {
     use diesel::prelude::*;
 
     use super::{DispatchRequest, FieldReport, WorkOrderStatus, orders_schema};
-    use crate::api::auth::{AuthPage, AuthUser};
+    use crate::api::auth::AuthPage;
     use crate::api::errors::ApiError;
     use crate::api::visibility::{self, Access, TECHNICIAN};
     use crate::db::models::work_orders::WorkOrder;
@@ -507,14 +507,14 @@ pub mod fragments {
 
     ///
     async fn send(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Path(alarm_id): Path<i64>,
         Form(request): Form<DispatchRequest>,
     ) -> Result<Response, ApiError> {
-        let user_id = auth.session.user_id;
+        let user_id = auth.0.session.user_id;
 
-        drop(super::dispatch(auth, State(state.clone()), Path(alarm_id), Json(request)).await?);
+        drop(super::dispatch(auth.0, State(state.clone()), Path(alarm_id), Json(request)).await?);
 
         let access = visibility::resolve(&state, user_id).await?;
         let conn = state.pool.get().await?;
@@ -540,14 +540,14 @@ pub mod fragments {
     }
 
     async fn complete(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Path(order_id): Path<i64>,
         Form(report): Form<FieldReport>,
     ) -> Result<Html<String>, ApiError> {
-        let user_id = auth.session.user_id;
+        let user_id = auth.0.session.user_id;
 
-        drop(super::complete(auth, State(state.clone()), Path(order_id), Json(report)).await?);
+        drop(super::complete(auth.0, State(state.clone()), Path(order_id), Json(report)).await?);
 
         let mut orders = load(&state, user_id, Some(order_id)).await?;
         let Some(order) = orders.pop() else {

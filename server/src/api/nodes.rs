@@ -101,16 +101,16 @@ async fn edit_form(
 }
 
 async fn edit(
-    auth: AuthUser,
+    auth: AuthPage,
     State(state): State<AppState>,
     Path(node_id): Path<i64>,
     Query(span): Query<SpanQuery>,
     Form(request): Form<crate::api::admin::NodeUpdate>,
 ) -> Result<Html<String>, ApiError> {
-    let user_id = auth.session.user_id;
+    let user_id = auth.0.session.user_id;
 
     drop(
-        crate::api::admin::update_node(auth, State(state.clone()), Path(node_id), Json(request))
+        crate::api::admin::update_node(auth.0, State(state.clone()), Path(node_id), Json(request))
             .await?,
     );
 

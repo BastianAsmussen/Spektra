@@ -685,7 +685,7 @@ pub mod fragments {
         MintedCredential, NewUserRequest, PlannedNodeRequest, SuspensionRequest, UserSummary,
         UserUpdate, all_users, nodes_schema, require_admin,
     };
-    use crate::api::auth::{AuthPage, AuthUser};
+    use crate::api::auth::AuthPage;
     use crate::api::errors::ApiError;
     use crate::api::pages;
     use crate::state::AppState;
@@ -714,12 +714,12 @@ pub mod fragments {
 
     ///
     async fn plan(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Form(request): Form<PlannedNodeRequest>,
     ) -> Result<Html<String>, ApiError> {
         let name = request.name.trim().to_owned();
-        let minted = super::plan_node(auth, State(state.clone()), Json(request))
+        let minted = super::plan_node(auth.0, State(state.clone()), Json(request))
             .await?
             .0;
 
@@ -727,11 +727,11 @@ pub mod fragments {
     }
 
     async fn rotate(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Path(id): Path<i64>,
     ) -> Result<Html<String>, ApiError> {
-        let minted = super::rotate_credential(auth, State(state.clone()), Path(id))
+        let minted = super::rotate_credential(auth.0, State(state.clone()), Path(id))
             .await?
             .0;
 
@@ -809,26 +809,26 @@ pub mod fragments {
     }
 
     async fn create(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Form(request): Form<NewUserRequest>,
     ) -> Result<Html<String>, ApiError> {
-        let user_id = auth.session.user_id;
+        let user_id = auth.0.session.user_id;
 
-        drop(super::create_user(auth, State(state.clone()), Json(request)).await?);
+        drop(super::create_user(auth.0, State(state.clone()), Json(request)).await?);
 
         render_users(&state, user_id).await
     }
 
     async fn update(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Path(id): Path<i64>,
         Form(request): Form<UserUpdate>,
     ) -> Result<Html<String>, ApiError> {
-        let user_id = auth.session.user_id;
+        let user_id = auth.0.session.user_id;
 
-        let updated = super::update_user(auth, State(state.clone()), Path(id), Json(request))
+        let updated = super::update_user(auth.0, State(state.clone()), Path(id), Json(request))
             .await?
             .0;
 
@@ -861,12 +861,12 @@ pub mod fragments {
     }
 
     async fn suspension(
-        auth: AuthUser,
+        auth: AuthPage,
         State(state): State<AppState>,
         Path(id): Path<i64>,
         Form(request): Form<SuspensionRequest>,
     ) -> Result<Html<String>, ApiError> {
-        drop(super::set_suspension(auth, State(state.clone()), Path(id), Json(request)).await?);
+        drop(super::set_suspension(auth.0, State(state.clone()), Path(id), Json(request)).await?);
 
         let conn = state.pool.get().await?;
         let (id, name, suspended, identity): (i64, String, bool, Option<String>) = conn
