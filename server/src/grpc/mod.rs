@@ -2,14 +2,18 @@ pub mod persist;
 pub mod validate;
 
 use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use chrono::{DateTime, Utc};
 use diesel::prelude::*;
+use futures_util::Stream;
 use protocol::v1::node_ingest_server::{NodeIngest, NodeIngestServer};
 use protocol::v1::{
     ChannelAssignment, ChannelPlan, ChannelPlanRequest, HealthAck, HealthReport, IngestAck,
-    MeasurementReport, NodeRegistrationRequest, NodeRegistrationResponse, ReportSchedule,
+    LiveAck, LiveCommand, LiveSample, LiveWatchRequest, MeasurementReport, NodeRegistrationRequest,
+    NodeRegistrationResponse, ReportSchedule,
 };
 use rand::RngExt;
 use serde_json::json;
@@ -18,26 +22,38 @@ use tonic::{Request, Response, Status};
 
 use crate::db::schema::node_credentials as credentials_schema;
 use crate::db::schema::nodes as nodes_schema;
+use crate::live;
 use crate::state::{AppState, NodeEvent};
 
-const SLOT_CYCLE_MS: i64 = 60_000;
+const DEFAULT_CYCLE_MS: i64 = 60_000;
 
+/// Knuth's multiplier, coprime with [`DEFAULT_CYCLE_MS`].
 const SLOT_SPREAD: i64 = 2_654_435_761;
 
 ///
-fn report_schedule(node_id: i64, now: DateTime<Utc>) -> Option<ReportSchedule> {
-    let millis = now.timestamp_millis();
-    let slot = node_id.wrapping_mul(SLOT_SPREAD).rem_euclid(SLOT_CYCLE_MS);
-    let cycle_start = millis.saturating_sub(millis.rem_euclid(SLOT_CYCLE_MS));
+fn report_schedule(node_id: i64, now: DateTime<Utc>, cycle_ms: i64) -> Option<ReportSchedule> {
+    let cycle_ms = if cycle_ms > 0 {
+        cycle_ms
+    } else {
+        DEFAULT_CYCLE_MS
+    };
 
+    let millis = now.timestamp_millis();
+    let slot = node_id.wrapping_mul(SLOT_SPREAD).rem_euclid(cycle_ms);
+    let cycle_start = millis.saturating_sub(millis.rem_euclid(cycle_ms));
     let mut next = cycle_start.saturating_add(slot);
     if next <= millis {
-        next = next.saturating_add(SLOT_CYCLE_MS);
+        next = next.saturating_add(cycle_ms);
     }
 
     Some(ReportSchedule {
         next_report_at: Some(SystemTime::from(DateTime::from_timestamp_millis(next)?).into()),
     })
+}
+
+struct NodeAuth {
+    node_id: i64,
+    cycle_ms: i64,
 }
 
 /// The v1 ingest service.
@@ -61,12 +77,13 @@ impl Ingest {
     }
 
     ///
-    async fn authenticate(&self, metadata: &MetadataMap) -> Result<i64, Status> {
+    ///
+    async fn authenticate(&self, metadata: &MetadataMap) -> Result<NodeAuth, Status> {
         let token = bearer_token(metadata)?;
         let now = Utc::now().naive_utc();
 
         let conn = self.state.ingest_pool.get().await.map_err(internal)?;
-        let (node_id, suspended) = conn
+        let (node_id, suspended, interval_seconds) = conn
             .interact(move |conn| {
                 credentials_schema::table
                     .inner_join(nodes_schema::table)
@@ -77,8 +94,12 @@ impl Ingest {
                             .is_null()
                             .or(credentials_schema::expires_at.gt(now)),
                     )
-                    .select((nodes_schema::id, nodes_schema::suspended))
-                    .first::<(i64, bool)>(conn)
+                    .select((
+                        nodes_schema::id,
+                        nodes_schema::suspended,
+                        nodes_schema::report_interval_seconds,
+                    ))
+                    .first::<(i64, bool, i32)>(conn)
             })
             .await
             .map_err(internal)?
@@ -93,18 +114,21 @@ impl Ingest {
             return Err(Status::permission_denied("this node is suspended"));
         }
 
-        Ok(node_id)
+        Ok(NodeAuth {
+            node_id,
+            cycle_ms: i64::from(interval_seconds).saturating_mul(1_000),
+        })
     }
 
     ///
     async fn authenticate_registration(
         &self,
         metadata: &MetadataMap,
-    ) -> Result<(i64, String), Status> {
+    ) -> Result<(NodeAuth, String), Status> {
         let token = bearer_token(metadata)?;
-        let node_id = self.authenticate(metadata).await?;
+        let auth = self.authenticate(metadata).await?;
 
-        Ok((node_id, token))
+        Ok((auth, token))
     }
 }
 
@@ -227,6 +251,77 @@ impl NodeIngest for Ingest {
     ) -> Result<Response<ChannelPlan>, Status> {
         self.channel_plan_inner(request).await
     }
+
+    type WatchLiveStream = Pin<Box<dyn Stream<Item = Result<LiveCommand, Status>> + Send>>;
+
+    /// Hold a stream open so the server can start a session on this node.
+    ///
+    async fn watch_live(
+        &self,
+        request: Request<LiveWatchRequest>,
+    ) -> Result<Response<Self::WatchLiveStream>, Status> {
+        let node_id = self.authenticate(request.metadata()).await?.node_id;
+        validate::live_watch(request.get_ref())?;
+
+        let sessions = Arc::clone(&self.state.live);
+        let commands = sessions.watch(node_id);
+
+        tracing::debug!(node_id, "a node is watching for live sessions");
+
+        let stream = futures_util::stream::unfold(
+            (commands, sessions, node_id),
+            |(mut commands, sessions, node_id)| async move {
+                let command = commands.recv().await?;
+
+                Some((Ok(command), (commands, sessions, node_id)))
+            },
+        );
+
+        Ok(Response::new(Box::pin(stream)))
+    }
+
+    /// Take one dwell from an inspected node and push it at open dashboards.
+    ///
+    async fn submit_live(&self, request: Request<LiveSample>) -> Result<Response<LiveAck>, Status> {
+        let node_id = self.authenticate(request.metadata()).await?.node_id;
+        validate::live(request.get_ref())?;
+
+        let sample = request.into_inner();
+        let session_id = sample.session_id;
+        let stamp = sample
+            .measured_at
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("measured_at is required"))?;
+        let measured_at = persist::naive_utc(stamp.seconds, stamp.nanos, "measured_at")?.and_utc();
+
+        if !self.state.live.accepts(node_id, session_id) {
+            return Ok(Response::new(live_ack(0)));
+        }
+
+        let readings = sample
+            .readings
+            .iter()
+            .map(|reading| Ok((persist::metric(reading.metric)?, reading.value)))
+            .collect::<Result<Vec<_>, Status>>()?;
+
+        self.state.publish_live(live::Sample {
+            node_id,
+            label: sample.label,
+            frequency_hz: sample.frequency_hz,
+            measured_at,
+            readings,
+        });
+
+        Ok(Response::new(live_ack(session_id)))
+    }
+}
+
+fn live_ack(session_id: u64) -> LiveAck {
+    LiveAck {
+        protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
+        server_time: Some(SystemTime::now().into()),
+        session_id,
+    }
 }
 
 impl Ingest {
@@ -235,7 +330,8 @@ impl Ingest {
         &self,
         request: Request<NodeRegistrationRequest>,
     ) -> Result<Response<NodeRegistrationResponse>, Status> {
-        let (node_id, credential) = self.authenticate_registration(request.metadata()).await?;
+        let (auth, credential) = self.authenticate_registration(request.metadata()).await?;
+        let node_id = auth.node_id;
 
         let req = request.into_inner();
         validate::registration(&req)?;
@@ -316,11 +412,11 @@ impl Ingest {
         })?;
 
         Ok(Response::new(NodeRegistrationResponse {
-            protocol_version: validate::PROTOCOL_VERSION.to_owned(),
+            protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
             node_id,
             credential,
             server_time: Some(SystemTime::now().into()),
-            schedule: report_schedule(node_id, Utc::now()),
+            schedule: report_schedule(node_id, Utc::now(), auth.cycle_ms),
         }))
     }
 
@@ -328,7 +424,7 @@ impl Ingest {
         &self,
         request: Request<MeasurementReport>,
     ) -> Result<Response<IngestAck>, Status> {
-        let node_id = self.authenticate(request.metadata()).await?;
+        let NodeAuth { node_id, cycle_ms } = self.authenticate(request.metadata()).await?;
 
         validate::measurements(request.get_ref())?;
         let report = persist::PreparedReport::try_from(request.into_inner())?;
@@ -351,10 +447,10 @@ impl Ingest {
         });
 
         Ok(Response::new(IngestAck {
-            protocol_version: validate::PROTOCOL_VERSION.to_owned(),
+            protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
             server_time: Some(SystemTime::now().into()),
             accepted_channels,
-            schedule: report_schedule(node_id, Utc::now()),
+            schedule: report_schedule(node_id, Utc::now(), cycle_ms),
         }))
     }
 
@@ -362,7 +458,7 @@ impl Ingest {
         &self,
         request: Request<HealthReport>,
     ) -> Result<Response<HealthAck>, Status> {
-        let node_id = self.authenticate(request.metadata()).await?;
+        let node_id = self.authenticate(request.metadata()).await?.node_id;
 
         validate::health(request.get_ref())?;
         let row = persist::health_row(node_id, request.get_ref())?;
@@ -377,7 +473,7 @@ impl Ingest {
         tracing::debug!(node_id, written, "health ingested");
 
         Ok(Response::new(HealthAck {
-            protocol_version: validate::PROTOCOL_VERSION.to_owned(),
+            protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
             server_time: Some(SystemTime::now().into()),
         }))
     }
@@ -386,7 +482,7 @@ impl Ingest {
         &self,
         request: Request<ChannelPlanRequest>,
     ) -> Result<Response<ChannelPlan>, Status> {
-        let node_id = self.authenticate(request.metadata()).await?;
+        let node_id = self.authenticate(request.metadata()).await?.node_id;
 
         validate::channel_plan(request.get_ref())?;
         let known = request.into_inner().known_plan_version;
@@ -411,7 +507,7 @@ impl Ingest {
         tracing::debug!(node_id, known, plan_version, "channel plan served");
 
         Ok(Response::new(ChannelPlan {
-            protocol_version: validate::PROTOCOL_VERSION.to_owned(),
+            protocol_version: protocol::PROTOCOL_VERSION.to_owned(),
             plan_version: plan_version.unsigned_abs(),
             channels,
             issued_at: Some(SystemTime::now().into()),
@@ -423,15 +519,21 @@ impl Ingest {
 mod tests {
     use super::*;
 
-    fn slot_ms(node_id: i64, now: DateTime<Utc>) -> i64 {
-        let schedule = report_schedule(node_id, now).expect("a schedule");
+    fn slot_ms(node_id: i64, now: DateTime<Utc>, cycle_ms: i64) -> i64 {
+        delay_ms(node_id, now, cycle_ms)
+            .saturating_add(now.timestamp_millis())
+            .rem_euclid(cycle_ms)
+    }
+
+    fn delay_ms(node_id: i64, now: DateTime<Utc>, cycle_ms: i64) -> i64 {
+        let schedule = report_schedule(node_id, now, cycle_ms).expect("a schedule");
         let at = schedule.next_report_at.expect("an instant");
         let millis = at
             .seconds
             .saturating_mul(1_000)
             .saturating_add(i64::from(at.nanos) / 1_000_000);
 
-        millis.rem_euclid(SLOT_CYCLE_MS)
+        millis.saturating_sub(now.timestamp_millis())
     }
 
     fn at(millis: i64) -> DateTime<Utc> {
@@ -441,10 +543,10 @@ mod tests {
 
     #[test]
     fn a_node_always_lands_on_its_own_slot() {
-        let expected = slot_ms(7, at(0));
+        let expected = slot_ms(7, at(0), DEFAULT_CYCLE_MS);
 
-        for offset in (0..SLOT_CYCLE_MS).step_by(997) {
-            assert_eq!(slot_ms(7, at(offset)), expected);
+        for offset in (0..DEFAULT_CYCLE_MS).step_by(997) {
+            assert_eq!(slot_ms(7, at(offset), DEFAULT_CYCLE_MS), expected);
         }
     }
 
@@ -453,13 +555,15 @@ mod tests {
         let fleet = 7_200_i64;
         let now = at(0);
 
-        let mut slots: Vec<i64> = (1..=fleet).map(|id| slot_ms(id, now)).collect();
+        let mut slots: Vec<i64> = (1..=fleet)
+            .map(|id| slot_ms(id, now, DEFAULT_CYCLE_MS))
+            .collect();
         slots.sort_unstable();
         slots.dedup();
 
         assert_eq!(slots.len(), 7_200, "ids collided on a slot");
 
-        let ideal = SLOT_CYCLE_MS / fleet;
+        let ideal = DEFAULT_CYCLE_MS / fleet;
         let widest = slots
             .windows(2)
             .filter_map(|pair| match pair {
@@ -479,16 +583,40 @@ mod tests {
     fn the_next_report_is_always_ahead_and_within_one_cycle() {
         for node_id in 0..500_i64 {
             let now = at(node_id.saturating_mul(37));
-            let schedule = report_schedule(node_id, now).expect("a schedule");
-            let at = schedule.next_report_at.expect("an instant");
-            let millis = at
-                .seconds
-                .saturating_mul(1_000)
-                .saturating_add(i64::from(at.nanos) / 1_000_000);
-            let delay = millis.saturating_sub(now.timestamp_millis());
+            let delay = delay_ms(node_id, now, DEFAULT_CYCLE_MS);
 
             assert!(delay > 0, "node {node_id} was told to report in the past");
-            assert!(delay <= SLOT_CYCLE_MS, "node {node_id} waits {delay} ms");
+            assert!(delay <= DEFAULT_CYCLE_MS, "node {node_id} waits {delay} ms");
         }
+    }
+
+    #[test]
+    fn a_shorter_cycle_reports_sooner_and_still_spreads() {
+        let cycle = 5_000_i64;
+        let now = at(0);
+
+        for node_id in 0..500_i64 {
+            let delay = delay_ms(node_id, now, cycle);
+
+            assert!(delay > 0, "node {node_id} was told to report in the past");
+            assert!(delay <= cycle, "node {node_id} waits {delay} ms of {cycle}");
+        }
+
+        let mut slots: Vec<i64> = (1..=500_i64).map(|id| slot_ms(id, now, cycle)).collect();
+        slots.sort_unstable();
+        slots.dedup();
+
+        assert_eq!(slots.len(), 500, "ids collided inside the shorter cycle");
+    }
+
+    #[test]
+    fn a_cycle_of_zero_falls_back_to_the_default() {
+        let now = at(1_234);
+
+        assert_eq!(
+            delay_ms(11, now, 0),
+            delay_ms(11, now, DEFAULT_CYCLE_MS),
+            "a zero cycle did not fall back"
+        );
     }
 }

@@ -9,6 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/v1/node.proto",
                 "proto/v1/measurement.proto",
                 "proto/v1/health.proto",
+                "proto/v1/live.proto",
                 "proto/v1/ingest.proto",
             ],
             &["proto"],

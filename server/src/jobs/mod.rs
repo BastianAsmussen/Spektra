@@ -336,5 +336,6 @@ pub async fn sample_throughput(state: AppState) {
         timer.tick().await;
 
         state.metrics.sample();
+        state.live.sweep();
     }
 }

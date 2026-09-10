@@ -22,7 +22,18 @@ const IDLE: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone)]
 pub struct Assignment {
     pub identity: ChannelIdentity,
-    pub spec: ChannelSpec,
+    /// Occupied bandwidth in Hz, or zero for the modulation's default.
+    pub bandwidth_hz: u32,
+}
+
+impl Assignment {
+    const fn spec(&self) -> ChannelSpec {
+        ChannelSpec {
+            frequency_hz: self.identity.frequency_hz,
+            modulation: self.identity.modulation,
+            bandwidth_hz: self.bandwidth_hz,
+        }
+    }
 }
 
 /// The set of channels a node is currently assigned, and its version.
@@ -106,7 +117,7 @@ impl<S: IqSource> Sampler<S> {
     }
 
     fn dwell_on(&mut self, assignment: &Assignment) -> Event {
-        let frequency_hz = assignment.spec.frequency_hz;
+        let frequency_hz = assignment.identity.frequency_hz;
 
         if let Err(err) = self.source.tune(frequency_hz) {
             return Event::Failed {
@@ -149,7 +160,7 @@ impl<S: IqSource> Sampler<S> {
 
         Event::Measured {
             channel: assignment.identity.clone(),
-            samples: derive(&psd, &assignment.spec),
+            samples: derive(&psd, &assignment.spec()),
         }
     }
 
@@ -208,11 +219,7 @@ mod tests {
                 modulation: Modulation::Fm,
                 label: format!("{frequency_hz} Hz"),
             },
-            spec: ChannelSpec {
-                frequency_hz,
-                modulation: Modulation::Fm,
-                bandwidth_hz: 0,
-            },
+            bandwidth_hz: 0,
         }
     }
 

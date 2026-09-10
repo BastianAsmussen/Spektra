@@ -1,4 +1,6 @@
 {%- import "fragments/icons.html" as icon -%}
+{%- import "fragments/node_tile.html" as tile -%}
+{%- import "fragments/chart.html" as chart -%}
 
 <article class="rounded border border-surface0 bg-mantle p-3 sm:p-4">
   <header class="flex flex-wrap items-start justify-between gap-3">
@@ -23,18 +25,20 @@
     </div>
 
     <div class="flex shrink-0 items-center gap-2">
-      <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide
-        {%- if state == "reporting" %} text-green
-        {%- else if state == "silent" %} text-yellow
-        {%- else if state == "suspended" %} text-red
-        {%- else %} text-overlay0{% endif %}">
+      <span class="flex items-center gap-1.5 text-xs uppercase tracking-wide {% call tile::state_color(state) %}{% endcall %}">
         {% call icon::dot("h-2 w-2") %}{% endcall %}
-        {%- if state == "reporting" %}rapporterer
-        {%- else if state == "silent" %}tavs
-        {%- else if state == "suspended" %}suspenderet
-        {%- else %}aldrig set{% endif -%}
+        {%- call tile::state_label(state) %}{% endcall -%}
       </span>
-      {% if may_edit %}
+      {% if rights.inspect %}
+        <button type="button" title="Live" aria-label="Live"
+          hx-get="/fragments/nodes/{{ id }}/inspect" hx-target="#node-live"
+          hx-swap="innerHTML"
+          class="flex h-7 w-7 items-center justify-center rounded border border-surface0
+            text-subtext0 transition hover:border-blue hover:text-blue">
+          {% call icon::waves("h-4 w-4") %}{% endcall %}
+        </button>
+      {% endif %}
+      {% if rights.edit %}
         <button type="button"
           hx-get="/fragments/nodes/{{ id }}/edit" hx-target="#node-edit"
           hx-swap="innerHTML"
@@ -52,6 +56,7 @@
   </header>
 
   <div id="node-edit" class="empty:hidden"></div>
+  <div id="node-live" class="empty:hidden"></div>
 
   <div class="mt-5 grid gap-6 2xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
   <section class="min-w-0">
@@ -131,12 +136,7 @@
               <figcaption class="mb-2 flex items-baseline justify-between gap-2">
                 <span class="text-sm font-medium text-text" data-chart-name>{{ metric }}</span>
                 <span class="flex items-baseline gap-2">
-                  {#- Hidden until a drag actually zooms. uPlot's own way back
-                      out is a double-click, which nobody discovers, so the way
-                      back is a button that appears exactly when it is needed. -#}
-                  <button type="button" data-chart-reset hidden
-                    class="rounded border border-surface0 px-1.5 py-0.5 text-xs text-subtext0
-                      transition hover:border-blue hover:text-blue">Nulstil zoom</button>
+                  {% call chart::reset_zoom() %}{% endcall %}
                   <span class="font-mono text-xs text-overlay0" data-chart-source></span>
                 </span>
               </figcaption>

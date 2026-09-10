@@ -119,6 +119,9 @@ pub struct NodeEditForm {
     pub owner_id: Option<i64>,
     pub owners: Vec<Owner>,
     pub may_assign_owner: bool,
+    pub report_interval_seconds: i32,
+    pub interval_min: i32,
+    pub interval_max: i32,
 }
 
 /// A credential, rendered once and never again.
@@ -282,7 +285,7 @@ pub struct NodePanel {
     pub id: i64,
     pub name: String,
     pub external_identity: String,
-    pub may_edit: bool,
+    pub rights: PanelRights,
     pub enrolled: bool,
     pub state: &'static str,
     pub at: Stamp,
@@ -293,6 +296,52 @@ pub struct NodePanel {
     pub spans: Vec<SpanChoice>,
     pub toggle: SpanChoice,
     pub show_all: bool,
+}
+
+/// What this viewer may do with the node in front of them.
+pub struct PanelRights {
+    pub edit: bool,
+    pub inspect: bool,
+}
+
+/// One metric of one live dwell, already formatted.
+pub struct LiveReading {
+    pub name: &'static str,
+    pub value: String,
+}
+
+/// One dwell, pushed out of band into an open inspect strip.
+#[derive(Template)]
+#[template(path = "fragments/live_readings.html")]
+pub struct LiveReadings {
+    pub node_id: i64,
+    pub slug: String,
+    pub label: String,
+    pub at: Stamp,
+    pub readings: Vec<LiveReading>,
+}
+
+/// One channel the inspect strip leaves a row for.
+pub struct LiveChannel {
+    pub name: String,
+    pub slug: String,
+}
+
+/// Whether the node answered, on its own for a renewal.
+#[derive(Template)]
+#[template(path = "fragments/live_renewal.html")]
+pub struct LiveRenewal {
+    pub reachable: bool,
+}
+
+/// The inspect strip, opened from the panel's live toggle.
+#[derive(Template)]
+#[template(path = "fragments/live_panel.html")]
+pub struct LivePanel {
+    pub node_id: i64,
+    pub channels: Vec<LiveChannel>,
+    pub reachable: bool,
+    pub renew_seconds: i64,
 }
 
 /// One work order as the list draws it.

@@ -1,0 +1,13 @@
+<div id="live-{{ node_id }}-{{ slug }}" hx-swap-oob="true"
+  class="grid gap-x-3 gap-y-1 border-t border-surface0 py-2
+    sm:grid-cols-[minmax(8rem,12rem)_minmax(0,1fr)] sm:items-baseline">
+  <span class="truncate text-xs text-subtext0">
+    {{ label }}
+    <time class="font-mono text-overlay0" datetime="{{ at.machine }}">{{ at.text }}</time>
+  </span>
+  <span class="flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs tabular-nums text-text">
+    {% for reading in readings %}
+      <span><span class="text-overlay0">{{ reading.name }}</span> {{ reading.value }}</span>
+    {% endfor %}
+  </span>
+</div>

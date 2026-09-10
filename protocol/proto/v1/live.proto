@@ -1,0 +1,57 @@
+// Spektra v1 live: one dwell, never persisted; node dials out.
+
+syntax = "proto3";
+
+package spektra.v1;
+
+import "google/protobuf/timestamp.proto";
+import "v1/common.proto";
+
+// Request to be told about live sessions on the calling node.
+message LiveWatchRequest {
+  // Must be "1" for the spektra.v1 service.
+  string protocol_version = 1;
+}
+
+// A live session the server wants, or the end of one.
+message LiveCommand {
+  // Echo of the protocol version the server answered with.
+  string protocol_version = 1;
+  // Server clock, for the node's clock-offset tracking.
+  google.protobuf.Timestamp server_time = 2;
+  // Identifies the session on every sample. Zero means stop.
+  uint64 session_id = 3;
+  // Shortest gap the server wants between samples. Zero means every dwell.
+  uint32 min_interval_ms = 4;
+  // Node self-stops so a gone server cannot sample forever.
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+// One metric from one dwell (single value, not SampleStats).
+message LiveReading {
+  Metric metric = 1;
+  double value = 2;
+}
+
+// One dwell on one channel, as it was measured.
+message LiveSample {
+  // Must be "1" for the spektra.v1 service.
+  string protocol_version = 1;
+  // From LiveCommand; a forgotten session is answered with session_id 0.
+  uint64 session_id = 2;
+  google.protobuf.Timestamp measured_at = 3;
+  uint64 frequency_hz = 4;
+  Modulation modulation = 5;
+  // Free-form, informational only.
+  string label = 6;
+  repeated LiveReading readings = 7;
+}
+
+message LiveAck {
+  // Echo of the protocol version the server answered with.
+  string protocol_version = 1;
+  // Server clock, for the node's clock-offset tracking.
+  google.protobuf.Timestamp server_time = 2;
+  // Duration left, or 0 to stop (ack survives a dead command stream).
+  uint64 session_id = 3;
+}

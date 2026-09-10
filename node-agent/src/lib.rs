@@ -3,6 +3,7 @@ pub mod config;
 pub mod dsp;
 pub mod health;
 pub mod identity;
+pub mod live;
 pub mod plan;
 pub mod report;
 pub mod sampler;

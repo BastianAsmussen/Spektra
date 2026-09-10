@@ -5,6 +5,7 @@ use chrono::NaiveDateTime;
 use tokio::sync::broadcast;
 
 use crate::db::models::enums::{AlarmState, Metric};
+use crate::live;
 use crate::ops::Metrics;
 
 const CHANNEL_CAPACITY: usize = 1024;
@@ -67,6 +68,8 @@ pub struct AppState {
     pub ingest_pool: deadpool_diesel::postgres::Pool,
     pub node_events: broadcast::Sender<NodeEvent>,
     pub alarm_events: broadcast::Sender<AlarmEvent>,
+    pub live_samples: broadcast::Sender<live::Sample>,
+    pub live: Arc<live::Sessions>,
     pub metrics: Arc<Metrics>,
 }
 
@@ -76,11 +79,15 @@ impl AppState {
     pub fn new(pool: deadpool_diesel::postgres::Pool) -> Self {
         let (node_events, _) = broadcast::channel(CHANNEL_CAPACITY);
         let (alarm_events, _) = broadcast::channel(CHANNEL_CAPACITY);
+        let (live_samples, _) = broadcast::channel(CHANNEL_CAPACITY);
+
         Self {
             ingest_pool: pool.clone(),
             pool,
             node_events,
             alarm_events,
+            live_samples,
+            live: Arc::new(live::Sessions::new()),
             metrics: Metrics::new(),
         }
     }
@@ -100,6 +107,11 @@ impl AppState {
     /// Publish an alarm event, ignoring the case where nobody is listening.
     pub fn publish_alarm(&self, event: AlarmEvent) {
         drop(self.alarm_events.send(event));
+    }
+
+    /// Publish one live dwell, ignoring the case where nobody is listening.
+    pub fn publish_live(&self, sample: live::Sample) {
+        drop(self.live_samples.send(sample));
     }
 }
 

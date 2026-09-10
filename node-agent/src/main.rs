@@ -7,9 +7,9 @@ use color_eyre::Result;
 use color_eyre::eyre::{Context as _, eyre};
 use node_agent::client::{Client, ClientError};
 use node_agent::config::{Config, Receiver};
-use node_agent::dsp::ChannelSpec;
 use node_agent::health::Health;
 use node_agent::identity::Identity;
+use node_agent::live::{self, Live};
 use node_agent::plan as plan_cache;
 use node_agent::report::{Aggregator, ChannelIdentity, ReportBuffer};
 use node_agent::sampler::{self, Assignment, Event, Plan, Sampler};
@@ -19,7 +19,6 @@ use tokio::sync::{mpsc, watch};
 use tracing_subscriber::EnvFilter;
 
 const REGISTRATION_RETRY: Duration = Duration::from_secs(30);
-
 const DEFAULT_FILTER: &str = "node_agent=info,warn";
 
 #[tokio::main]
@@ -58,6 +57,9 @@ async fn main() -> Result<()> {
     let buffer = ReportBuffer::new(config.pending_path(), config.buffer_limit_bytes);
     let mut aggregator = Aggregator::new(SystemTime::now());
 
+    let (live, watcher) = live::spawn(client.duplicate());
+    let watcher = tokio::spawn(watcher);
+
     run(
         &config,
         &mut client,
@@ -65,8 +67,11 @@ async fn main() -> Result<()> {
         &mut aggregator,
         events_rx,
         &plan_tx,
+        &live,
     )
     .await;
+
+    watcher.abort();
 
     shutdown(&running, sampler, &mut client, &buffer, &mut aggregator).await;
     tracing::info!(node_id = identity.node_id, "stopped");
@@ -130,6 +135,7 @@ async fn run(
     aggregator: &mut Aggregator,
     mut events: mpsc::UnboundedReceiver<Event>,
     plan: &watch::Sender<Plan>,
+    live: &Live,
 ) {
     let mut window = tokio::time::interval(config.window);
     let mut health = tokio::time::interval(config.health_interval);
@@ -143,7 +149,10 @@ async fn run(
     loop {
         tokio::select! {
             event = events.recv() => match event {
-                Some(Event::Measured { channel, samples }) => aggregator.record(&channel, &samples),
+                Some(Event::Measured { channel, samples }) => {
+                    live.offer(&channel, &samples);
+                    aggregator.record(&channel, &samples);
+                }
                 Some(Event::Failed { frequency_hz, reason }) => {
                     tracing::warn!(frequency_hz, reason, "a dwell produced nothing");
                 }
@@ -312,11 +321,7 @@ fn translate(served: &ChannelPlan) -> Plan {
                         modulation,
                         label,
                     },
-                    spec: ChannelSpec {
-                        frequency_hz: channel.frequency_hz,
-                        modulation,
-                        bandwidth_hz: channel.bandwidth_hz,
-                    },
+                    bandwidth_hz: channel.bandwidth_hz,
                 }
             })
             .collect(),

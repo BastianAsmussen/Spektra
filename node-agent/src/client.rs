@@ -1,10 +1,12 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use protocol::PROTOCOL_VERSION;
 use protocol::schedule_delay;
 use protocol::v1::node_ingest_client::NodeIngestClient;
 use protocol::v1::{
-    Capabilities, ChannelPlan, ChannelPlanRequest, Hardware, HealthReport, IngestAck, Location,
-    MeasurementReport, Metric, Modulation, NodeRegistrationRequest,
+    Capabilities, ChannelPlan, ChannelPlanRequest, Hardware, HealthReport, IngestAck, LiveAck,
+    LiveCommand, LiveSample, LiveWatchRequest, Location, MeasurementReport, Modulation,
+    NodeRegistrationRequest,
 };
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tonic::transport::{Channel, ClientTlsConfig};
@@ -14,8 +16,6 @@ use crate::config::Config;
 use crate::dsp::DERIVED_METRICS;
 use crate::health::Health;
 use crate::identity::{self, Identity, IdentityError};
-
-pub const PROTOCOL_VERSION: &str = "1";
 
 /// Why a call could not be made.
 #[derive(Debug)]
@@ -117,6 +117,41 @@ impl Client {
     #[must_use]
     pub const fn delivery_delay(&self) -> Option<Duration> {
         self.delivery_delay
+    }
+
+    /// A second client over the same connection, holding the same credential.
+    ///
+    #[must_use]
+    pub fn duplicate(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            credential: self.credential.clone(),
+            clock_offset_seconds: self.clock_offset_seconds,
+            delivery_delay: None,
+        }
+    }
+
+    /// Open the stream the server pushes live sessions down.
+    ///
+    /// # Errors
+    ///
+    pub async fn watch_live(&mut self) -> Result<tonic::Streaming<LiveCommand>, ClientError> {
+        let request = self.authenticated(LiveWatchRequest {
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+        })?;
+
+        Ok(self.inner.watch_live(request).await?.into_inner())
+    }
+
+    /// Send one dwell to an open live session.
+    ///
+    /// # Errors
+    ///
+    /// [`ClientError::Rpc`] if the server refuses it.
+    pub async fn submit_live(&mut self, sample: LiveSample) -> Result<LiveAck, ClientError> {
+        let request = self.authenticated(sample)?;
+
+        Ok(self.inner.submit_live(request).await?.into_inner())
     }
 
     /// Load the stored identity, or register this node and store one.
@@ -289,18 +324,6 @@ impl Client {
     }
 }
 
-///
-#[must_use]
-pub const fn accepted_range(metric: Metric) -> Option<(f64, f64)> {
-    match metric {
-        Metric::SignalStrength => Some((-150.0, 0.0)),
-        Metric::SignalToNoise => Some((0.0, 80.0)),
-        Metric::CarrierOffset => Some((-200_000.0, 200_000.0)),
-        Metric::DemodErrorRate | Metric::SpectrumOccupancy => Some((0.0, 1.0)),
-        Metric::Unspecified => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,22 +332,10 @@ mod tests {
     fn every_derived_metric_has_an_accepted_range() {
         for metric in DERIVED_METRICS {
             assert!(
-                accepted_range(*metric).is_some(),
+                protocol::metric_range(*metric).is_some(),
                 "{metric:?} is derived but has no accepted range"
             );
         }
-    }
-
-    #[test]
-    fn the_ranges_match_the_servers() {
-        assert_eq!(accepted_range(Metric::SignalStrength), Some((-150.0, 0.0)));
-        assert_eq!(accepted_range(Metric::SignalToNoise), Some((0.0, 80.0)));
-        assert_eq!(
-            accepted_range(Metric::CarrierOffset),
-            Some((-200_000.0, 200_000.0))
-        );
-        assert_eq!(accepted_range(Metric::SpectrumOccupancy), Some((0.0, 1.0)));
-        assert_eq!(accepted_range(Metric::Unspecified), None);
     }
 
     #[test]
