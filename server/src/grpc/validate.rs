@@ -4,24 +4,17 @@ use protocol::v1::{
 };
 use tonic::Status;
 
-pub const PROTOCOL_VERSION: &str = "1";
-
 const MAX_WINDOW_SECONDS: i64 = 86_400;
-
-const SNR_RANGE: std::ops::RangeInclusive<f64> = 0.0..=80.0;
-
-const CARRIER_OFFSET_RANGE: std::ops::RangeInclusive<f64> = -200_000.0..=200_000.0;
-
 const TEMPERATURE_RANGE: std::ops::RangeInclusive<f64> = -40.0..=150.0;
-
 const CLOCK_OFFSET_RANGE: std::ops::RangeInclusive<f64> = -3_600.0..=3_600.0;
 
 fn check_version(version: &str) -> Result<(), Status> {
-    if version == PROTOCOL_VERSION {
+    let expected = protocol::PROTOCOL_VERSION;
+    if version == expected {
         Ok(())
     } else {
         Err(Status::invalid_argument(format!(
-            "unsupported protocol_version '{version}', expected '{PROTOCOL_VERSION}'"
+            "unsupported protocol_version '{version}', expected '{expected}'"
         )))
     }
 }
@@ -30,6 +23,7 @@ fn check_version(version: &str) -> Result<(), Status> {
 ///
 /// # Errors
 ///
+/// Returns [`Status::invalid_argument`] when the request cannot be accepted.
 pub fn registration(req: &NodeRegistrationRequest) -> Result<(), Status> {
     check_version(&req.protocol_version)?;
 
@@ -94,6 +88,7 @@ pub fn registration(req: &NodeRegistrationRequest) -> Result<(), Status> {
 ///
 /// # Errors
 ///
+/// Returns [`Status::invalid_argument`] when the report or any reading cannot be accepted.
 pub fn measurements(report: &MeasurementReport) -> Result<(), Status> {
     check_version(&report.protocol_version)?;
 
@@ -124,30 +119,7 @@ pub fn measurements(report: &MeasurementReport) -> Result<(), Status> {
     }
 
     for channel in &report.channels {
-        if channel.frequency_hz == 0 {
-            return Err(Status::invalid_argument("frequency_hz must not be zero"));
-        }
-        match Modulation::try_from(channel.modulation) {
-            Ok(Modulation::Fm) => {
-                if !(87_500_000..=108_000_000).contains(&channel.frequency_hz) {
-                    return Err(Status::invalid_argument(format!(
-                        "frequency {} Hz is outside the FM broadcast band",
-                        channel.frequency_hz
-                    )));
-                }
-            }
-            Ok(Modulation::Dab) => {
-                if !(174_000_000..=240_000_000).contains(&channel.frequency_hz) {
-                    return Err(Status::invalid_argument(format!(
-                        "frequency {} Hz is outside the DAB band",
-                        channel.frequency_hz
-                    )));
-                }
-            }
-            Ok(Modulation::Unspecified) | Err(_) => {
-                return Err(Status::invalid_argument("modulation must be FM or DAB"));
-            }
-        }
+        check_band(channel.frequency_hz, channel.modulation)?;
 
         if channel.readings.is_empty() {
             return Err(Status::invalid_argument(
@@ -166,6 +138,7 @@ pub fn measurements(report: &MeasurementReport) -> Result<(), Status> {
 ///
 /// # Errors
 ///
+/// Returns [`Status::invalid_argument`] when the report cannot be accepted.
 pub fn health(report: &HealthReport) -> Result<(), Status> {
     check_version(&report.protocol_version)?;
 
@@ -208,9 +181,9 @@ pub fn health(report: &HealthReport) -> Result<(), Status> {
 
 /// Validate a channel plan request.
 ///
-///
 /// # Errors
 ///
+/// Returns [`Status::invalid_argument`] when the protocol version does not match.
 pub fn channel_plan(req: &ChannelPlanRequest) -> Result<(), Status> {
     check_version(&req.protocol_version)
 }
@@ -263,24 +236,83 @@ fn validate_stats(metric: i32, stats: Option<&SampleStats>) -> Result<(), Status
         ));
     }
 
-    let range = match Metric::try_from(metric) {
-        Ok(Metric::SignalStrength) => Some(-150.0..=0.0),
-        Ok(Metric::SignalToNoise) => Some(SNR_RANGE.clone()),
-        Ok(Metric::CarrierOffset) => Some(CARRIER_OFFSET_RANGE.clone()),
-        Ok(Metric::DemodErrorRate | Metric::SpectrumOccupancy) => Some(0.0..=1.0),
-        Ok(Metric::Unspecified) | Err(_) => None,
-    };
-
-    let Some(range) = range else {
-        return Err(Status::invalid_argument("metric must be a known metric"));
-    };
-
+    let range = metric_range(metric)?;
     if !range.contains(&stats.min) || !range.contains(&stats.max) {
         return Err(Status::invalid_argument(format!(
             "metric values must lie within {} to {}",
             range.start(),
             range.end()
         )));
+    }
+
+    Ok(())
+}
+
+fn check_band(frequency_hz: u64, modulation: i32) -> Result<(), Status> {
+    if frequency_hz == 0 {
+        return Err(Status::invalid_argument("frequency_hz must not be zero"));
+    }
+
+    match Modulation::try_from(modulation) {
+        Ok(Modulation::Fm) if (87_500_000..=108_000_000).contains(&frequency_hz) => Ok(()),
+        Ok(Modulation::Fm) => Err(Status::invalid_argument(format!(
+            "frequency {frequency_hz} Hz is outside the FM broadcast band"
+        ))),
+        Ok(Modulation::Dab) if (174_000_000..=240_000_000).contains(&frequency_hz) => Ok(()),
+        Ok(Modulation::Dab) => Err(Status::invalid_argument(format!(
+            "frequency {frequency_hz} Hz is outside the DAB band"
+        ))),
+        Ok(Modulation::Unspecified) | Err(_) => {
+            Err(Status::invalid_argument("modulation must be FM or DAB"))
+        }
+    }
+}
+
+/// The physically meaningful range one metric is accepted in.
+///
+/// # Errors
+///
+/// Returns [`Status::invalid_argument`] for a number that is not a known metric.
+pub fn metric_range(metric: i32) -> Result<std::ops::RangeInclusive<f64>, Status> {
+    Metric::try_from(metric)
+        .ok()
+        .and_then(protocol::metric_range)
+        .ok_or_else(|| Status::invalid_argument("metric must be a known metric"))
+}
+
+/// Reject a live watch request that is not for this protocol version.
+///
+/// # Errors
+///
+/// Returns [`Status::invalid_argument`] for any other version.
+pub fn live_watch(request: &protocol::v1::LiveWatchRequest) -> Result<(), Status> {
+    check_version(&request.protocol_version)
+}
+
+/// Reject a live sample that is not a plausible reading of a real channel.
+///
+/// # Errors
+///
+/// Returns [`Status::invalid_argument`] for a bad version, band, empty readings, or out-of-range value.
+pub fn live(sample: &protocol::v1::LiveSample) -> Result<(), Status> {
+    check_version(&sample.protocol_version)?;
+    check_band(sample.frequency_hz, sample.modulation)?;
+
+    if sample.readings.is_empty() {
+        return Err(Status::invalid_argument(
+            "a live sample carries no readings",
+        ));
+    }
+
+    for reading in &sample.readings {
+        let range = metric_range(reading.metric)?;
+        if !reading.value.is_finite() || !range.contains(&reading.value) {
+            return Err(Status::invalid_argument(format!(
+                "metric values must lie within {} to {}",
+                range.start(),
+                range.end()
+            )));
+        }
     }
 
     Ok(())

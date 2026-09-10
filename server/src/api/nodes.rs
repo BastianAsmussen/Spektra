@@ -23,8 +23,8 @@ use crate::{
     },
     state::AppState,
     templates::{
-        ChannelView, HealthView, Meter, NodeEditForm, NodePanel, Owner, SpanChoice, stamp,
-        stamp_or_empty,
+        ChannelView, HealthView, LiveChannel, LivePanel, LiveRenewal, Meter, NodeEditForm,
+        NodePanel, Owner, PanelRights, SpanChoice, stamp, stamp_or_empty,
     },
 };
 
@@ -49,6 +49,114 @@ pub fn routes() -> Router<AppState> {
         .route("/api/nodes", get(list_nodes))
         .route("/fragments/nodes/{id}", get(node_panel))
         .route("/fragments/nodes/{id}/edit", get(edit_form).post(edit))
+        .route(
+            "/fragments/nodes/{id}/inspect",
+            get(inspect).post(renew).delete(release),
+        )
+}
+
+///
+const RENEW_SECONDS: i64 = 15;
+
+/// The DOM id a channel's live row is addressed by.
+///
+#[must_use]
+pub fn channel_slug(frequency_hz: u64) -> String {
+    frequency_hz.to_string()
+}
+
+///
+fn may_inspect(access: &Access, node_id: i64) -> bool {
+    access.may_act() && access.visibility.allows(node_id)
+}
+
+///
+async fn begin(state: &AppState, user_id: i64, node_id: i64) -> Result<bool, ApiError> {
+    let access = visibility::resolve(state, user_id).await?;
+    if !may_inspect(&access, node_id) {
+        return Err(ApiError::Forbidden(
+            "You may not ask this node for a live readout.".into(),
+        ));
+    }
+
+    Ok(state.live.open(node_id) == crate::live::Reach::Told)
+}
+
+async fn inspect(
+    auth: AuthPage,
+    State(state): State<AppState>,
+    Path(node_id): Path<i64>,
+) -> Result<Html<String>, ApiError> {
+    let reachable = begin(&state, auth.0.session.user_id, node_id).await?;
+    if !reachable {
+        tracing::info!(
+            node_id,
+            "a live session was opened on a node that is not watching"
+        );
+    }
+
+    let conn = state.pool.get().await?;
+    let rows: Vec<(String, i64)> = conn
+        .interact(move |conn| {
+            node_channels_schema::table
+                .inner_join(
+                    channels_schema::table
+                        .on(channels_schema::id.eq(node_channels_schema::channel_id)),
+                )
+                .filter(node_channels_schema::node_id.eq(node_id))
+                .order(channels_schema::frequency_hz.asc())
+                .select((channels_schema::name, channels_schema::frequency_hz))
+                .load(conn)
+        })
+        .await??;
+
+    let html = LivePanel {
+        node_id,
+        channels: rows
+            .into_iter()
+            .map(|(name, frequency_hz)| LiveChannel {
+                name,
+                slug: channel_slug(frequency_hz.unsigned_abs()),
+            })
+            .collect(),
+        reachable,
+        renew_seconds: RENEW_SECONDS,
+    }
+    .render()
+    .map_err(ApiError::internal)?;
+
+    Ok(Html(html))
+}
+
+async fn renew(
+    auth: AuthPage,
+    State(state): State<AppState>,
+    Path(node_id): Path<i64>,
+) -> Result<Html<String>, ApiError> {
+    let reachable = begin(&state, auth.0.session.user_id, node_id).await?;
+
+    let html = LiveRenewal { reachable }
+        .render()
+        .map_err(ApiError::internal)?;
+
+    Ok(Html(html))
+}
+
+async fn release(
+    auth: AuthPage,
+    State(state): State<AppState>,
+    Path(node_id): Path<i64>,
+) -> Result<Html<String>, ApiError> {
+    let access = visibility::resolve(&state, auth.0.session.user_id).await?;
+    if !access.visibility.allows(node_id) {
+        return Err(ApiError::Forbidden(
+            "This node is not one you are dispatched to.".into(),
+        ));
+    }
+
+    state.live.close(node_id);
+
+    Ok(Html(String::new()))
 }
 
 async fn edit_form(
@@ -64,8 +172,14 @@ async fn edit_form(
     }
 
     let conn = state.pool.get().await?;
-    let (name, latitude, longitude, owner_id): (String, Option<f64>, Option<f64>, Option<i64>) =
-        conn.interact(move |conn| {
+    let (name, latitude, longitude, owner_id, report_interval_seconds): (
+        String,
+        Option<f64>,
+        Option<f64>,
+        Option<i64>,
+        i32,
+    ) = conn
+        .interact(move |conn| {
             nodes_schema::table
                 .filter(nodes_schema::id.eq(node_id))
                 .select((
@@ -73,6 +187,7 @@ async fn edit_form(
                     nodes_schema::latitude,
                     nodes_schema::longitude,
                     nodes_schema::owner_id,
+                    nodes_schema::report_interval_seconds,
                 ))
                 .first(conn)
         })
@@ -93,6 +208,9 @@ async fn edit_form(
         owner_id,
         owners,
         may_assign_owner,
+        report_interval_seconds,
+        interval_min: crate::api::admin::MIN_REPORT_INTERVAL,
+        interval_max: crate::api::admin::MAX_REPORT_INTERVAL,
     }
     .render()
     .map_err(ApiError::internal)?;
@@ -314,7 +432,10 @@ pub async fn panel(
     let key = span.key().to_owned();
     let channels = channels(&conn, node_id, hours, show_all).await?;
 
-    let may_edit = visibility::may_edit_node(state, access, node_id).await?;
+    let rights = PanelRights {
+        edit: visibility::may_edit_node(state, access, node_id).await?,
+        inspect: may_inspect(access, node_id),
+    };
 
     let now = Utc::now().naive_utc();
     let panel = NodePanel {
@@ -322,7 +443,7 @@ pub async fn panel(
         name: node.name,
         enrolled: node.external_identity.is_some(),
         external_identity: node.external_identity.unwrap_or_default(),
-        may_edit,
+        rights,
         state: state_of(node.suspended, node.last_seen_at, now),
         at: stamp_or_empty(node.last_seen_at),
         position: position(node.latitude, node.longitude),

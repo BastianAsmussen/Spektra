@@ -26,7 +26,15 @@
       </label>
     {% endif %}
 
-    {#- Both or neither; the handler rejects a half-filled pair. -#}
+    <label class="grid content-start gap-2">
+      <span class="text-sm font-medium text-subtext0">Rapportinterval (sekunder)</span>
+      <input type="number" name="report_interval_seconds" required step="5"
+        min="{{ interval_min }}" max="{{ interval_max }}"
+        value="{{ report_interval_seconds }}"
+        class="h-10 rounded-md border border-surface0 bg-mantle px-3 text-sm text-text
+          focus:border-blue focus:outline-none focus:ring-2 focus:ring-blue/30">
+    </label>
+
     <label class="grid content-start gap-2">
       <span class="text-sm font-medium text-subtext0">Breddegrad</span>
       <input type="number" name="latitude" step="any" min="-90" max="90"

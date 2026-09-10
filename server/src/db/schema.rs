@@ -140,6 +140,7 @@ diesel::table! {
         hardware -> Jsonb,
         capabilities -> Jsonb,
         suspended -> Bool,
+        report_interval_seconds -> Int4,
         channel_plan_version -> Int8,
         owner_id -> Nullable<Int8>,
         created_at -> Timestamp,

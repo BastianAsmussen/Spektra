@@ -15,12 +15,10 @@ use crate::jobs::detector;
 use crate::state::AppState;
 
 /// Longest span a request may ask for, in days.
-///
 const MAX_SPAN_DAYS: i64 = 730;
 
 const DEFAULT_SPAN_HOURS: i64 = 24;
 
-///
 const MAX_POINTS: i64 = 20_000;
 
 /// All routes serving measurement history.
@@ -61,7 +59,6 @@ pub enum Source {
 
 impl Source {
     /// The source that can serve a span without reading pruned rows.
-    ///
     #[must_use]
     pub const fn for_span(span: TimeDelta) -> Self {
         let hours = span.num_hours();
@@ -90,7 +87,6 @@ impl Source {
 }
 
 /// One measured point.
-///
 #[derive(Debug, Default, Serialize, ToSchema)]
 pub struct Points {
     /// Window starts as Unix seconds, oldest first.
@@ -106,6 +102,7 @@ pub struct Presentation {
     pub name: &'static str,
     /// Unit the values carry once scaled, for the axis.
     pub unit: &'static str,
+    /// What to multiply a stored value by to reach that unit.
     pub scale: f64,
 }
 
@@ -123,10 +120,10 @@ pub struct Series {
     /// How to label and scale the values.
     pub presentation: Presentation,
     pub points: Points,
+    /// Detector acceptance interval, when enough history exists.
     pub band: Option<(f64, f64)>,
 }
 
-///
 const fn presentation(metric: Metric) -> Presentation {
     match metric {
         Metric::SignalStrength => Presentation {
@@ -157,10 +154,22 @@ const fn presentation(metric: Metric) -> Presentation {
     }
 }
 
+/// One reading as the live strip writes it: Danish name and scaled value.
+#[must_use]
+pub fn reading(metric: Metric, value: f64) -> (&'static str, String) {
+    let drawn = presentation(metric);
+    let scaled = value * drawn.scale;
+    let decimals = if drawn.unit == "%" { 2 } else { 1 };
+    let unit = drawn.unit;
+
+    (drawn.name, format!("{scaled:.decimals$} {unit}"))
+}
+
 /// One metric's history as JSON.
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session, a forbidden node, or a database failure.
 #[utoipa::path(
     get,
     path = "/api/series/{node}/{channel}/{metric}",
@@ -229,7 +238,6 @@ async fn load(
         .await??;
     let points = columns(points, presentation(metric).scale);
 
-    let conn = state.pool.get().await?;
     let band = conn
         .interact(move |conn| {
             detector::baseline(conn, node_id, channel_id, metric, hour_of(now), now)

@@ -1,0 +1,38 @@
+{%- import "fragments/icons.html" as icon -%}
+{%- import "fragments/live_status.html" as live -%}
+
+<div class="mt-4 rounded-md border border-blue/40 bg-canvas p-3">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <h3 class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-blue">
+      {% call icon::waves("h-4 w-4") %}{% endcall %}Live
+    </h3>
+
+    <div class="flex items-center gap-2">
+      <span class="font-mono text-xs text-overlay0"
+        hx-post="/fragments/nodes/{{ node_id }}/inspect"
+        hx-trigger="every {{ renew_seconds }}s" hx-target="this" hx-swap="innerHTML">
+        {% call live::status(reachable) %}{% endcall %}
+      </span>
+      <button type="button" aria-label="Stop live"
+        hx-delete="/fragments/nodes/{{ node_id }}/inspect"
+        hx-target="#node-live" hx-swap="innerHTML"
+        class="flex h-7 w-7 items-center justify-center rounded border border-surface0
+          text-overlay0 transition hover:border-red hover:text-red">
+        {% call icon::close("h-4 w-4") %}{% endcall %}
+      </button>
+    </div>
+  </div>
+
+  <div class="mt-1">
+    {% for channel in channels %}
+      <div id="live-{{ node_id }}-{{ channel.slug }}"
+        class="grid gap-x-3 border-t border-surface0 py-2
+          sm:grid-cols-[minmax(8rem,12rem)_minmax(0,1fr)] sm:items-baseline">
+        <span class="truncate text-xs text-subtext0">{{ channel.name }}</span>
+        <span class="font-mono text-xs text-overlay0">afventer måling</span>
+      </div>
+    {% else %}
+      <p class="text-sm text-overlay0">Noden er ikke tildelt nogen kanaler.</p>
+    {% endfor %}
+  </div>
+</div>

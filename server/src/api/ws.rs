@@ -13,8 +13,9 @@ use tokio::sync::broadcast::error::RecvError;
 use super::auth::{self, AuthUser};
 use super::errors::ApiError;
 use super::visibility::{self, Visibility};
+use crate::live;
 use crate::state::{AlarmEvent, AppState, NodeEvent};
-use crate::templates::{AlarmStub, NodeStatusFragment};
+use crate::templates::{AlarmStub, LiveReading, LiveReadings, NodeStatusFragment};
 
 const REVALIDATE: Duration = Duration::from_mins(1);
 
@@ -41,6 +42,7 @@ async fn run(socket: WebSocket, state: AppState, visibility: Visibility, token: 
     let (mut sender, mut receiver) = socket.split();
     let mut node_events = state.node_events.subscribe();
     let mut alarm_events = state.alarm_events.subscribe();
+    let mut live_samples = state.live_samples.subscribe();
 
     let mut revalidate = tokio::time::interval(REVALIDATE);
     revalidate.tick().await;
@@ -76,6 +78,20 @@ async fn run(socket: WebSocket, state: AppState, visibility: Visibility, token: 
                 }
                 Err(RecvError::Lagged(skipped)) => {
                     tracing::warn!(skipped, "alarm event receiver lagged, dropping the gap");
+                }
+                Err(RecvError::Closed) => break,
+            },
+
+            sample = live_samples.recv() => match sample {
+                Ok(sample) => {
+                    if visibility.allows(sample.node_id)
+                        && send(&mut sender, live_fragment(&sample)).await.is_err()
+                    {
+                        break;
+                    }
+                }
+                Err(RecvError::Lagged(skipped)) => {
+                    tracing::warn!(skipped, "live sample receiver lagged, dropping the gap");
                 }
                 Err(RecvError::Closed) => break,
             },
@@ -122,6 +138,25 @@ fn node_fragment(event: &NodeEvent) -> Result<String, askama::Error> {
         node_id: event.node_id(),
         state,
         at,
+    }
+    .render()
+}
+
+fn live_fragment(sample: &live::Sample) -> Result<String, askama::Error> {
+    LiveReadings {
+        node_id: sample.node_id,
+        slug: crate::api::nodes::channel_slug(sample.frequency_hz),
+        label: sample.label.clone(),
+        at: crate::templates::stamp(sample.measured_at.naive_utc()),
+        readings: sample
+            .readings
+            .iter()
+            .map(|&(metric, value)| {
+                let (name, value) = crate::api::series::reading(metric, value);
+
+                LiveReading { name, value }
+            })
+            .collect(),
     }
     .render()
 }

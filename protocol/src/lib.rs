@@ -1,3 +1,6 @@
+//! Spektra gRPC protocol, version 1. Types are generated from `proto/v1/`.
+
+/// Generated v1 types (`package spektra.v1`).
 #[expect(
     clippy::allow_attributes,
     clippy::as_conversions,
@@ -18,8 +21,10 @@ pub mod v1 {
 use std::ops::RangeInclusive;
 use std::time::Duration;
 
+/// Protocol version sent on every request.
 pub const PROTOCOL_VERSION: &str = "1";
 
+/// Accepted range for a metric on the wire. `None` for unspecified.
 #[must_use]
 pub const fn metric_range(metric: v1::Metric) -> Option<RangeInclusive<f64>> {
     match metric {
@@ -31,8 +36,10 @@ pub const fn metric_range(metric: v1::Metric) -> Option<RangeInclusive<f64>> {
     }
 }
 
+/// Longest a node may defer a delivery (inside the hourly rollup).
 pub const MAX_DEFERRAL: Duration = Duration::from_mins(5);
 
+/// Delay until the next delivery, clamped to [`MAX_DEFERRAL`]. `None` keeps the caller's cadence.
 #[must_use]
 pub fn schedule_delay(
     schedule: Option<&v1::ReportSchedule>,
@@ -41,14 +48,44 @@ pub fn schedule_delay(
     let next = schedule?.next_report_at.as_ref()?;
     let issued = server_time?;
 
-    let seconds = next.seconds.saturating_sub(issued.seconds);
-    let nanos = i64::from(next.nanos).saturating_sub(i64::from(issued.nanos));
+    Some(gap(issued, next)?.min(MAX_DEFERRAL))
+}
+
+/// Fastest live sampling interval the node will honour.
+pub const MIN_LIVE_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Longest a live session stays open without being renewed.
+pub const MAX_LIVE_SESSION: Duration = Duration::from_mins(10);
+
+/// Remaining duration and sampling interval of a live session. `None` if it has ended.
+#[must_use]
+pub fn live_session(command: &v1::LiveCommand) -> Option<(Duration, Duration)> {
+    if command.session_id == 0 {
+        return None;
+    }
+
+    let issued = command.server_time.as_ref()?;
+    let expires = command.expires_at.as_ref()?;
+
+    let remaining = gap(issued, expires)?.min(MAX_LIVE_SESSION);
+    if remaining.is_zero() {
+        return None;
+    }
+
+    let interval = Duration::from_millis(u64::from(command.min_interval_ms)).max(MIN_LIVE_INTERVAL);
+
+    Some((remaining, interval))
+}
+
+fn gap(from: &prost_types::Timestamp, to: &prost_types::Timestamp) -> Option<Duration> {
+    let seconds = to.seconds.saturating_sub(from.seconds);
+    let nanos = i64::from(to.nanos).saturating_sub(i64::from(from.nanos));
     let total = seconds
         .saturating_mul(1_000_000_000)
         .saturating_add(nanos)
         .max(0);
 
-    Some(Duration::from_nanos(u64::try_from(total).unwrap_or(0)).min(MAX_DEFERRAL))
+    Some(Duration::from_nanos(u64::try_from(total).ok()?))
 }
 
 #[cfg(test)]
@@ -90,5 +127,49 @@ mod tests {
     fn a_missing_schedule_leaves_the_caller_alone() {
         assert_eq!(schedule_delay(None, Some(&stamp(1_000_000))), None);
         assert_eq!(schedule_delay(Some(&schedule(1_000_042)), None), None);
+    }
+
+    fn command(session_id: u64, issued: i64, expires: i64, interval_ms: u32) -> v1::LiveCommand {
+        v1::LiveCommand {
+            protocol_version: "1".to_owned(),
+            server_time: Some(stamp(issued)),
+            session_id,
+            min_interval_ms: interval_ms,
+            expires_at: Some(stamp(expires)),
+        }
+    }
+
+    #[test]
+    fn a_live_session_runs_for_the_gap_it_was_given() {
+        let (remaining, interval) =
+            live_session(&command(9, 1_000_000, 1_000_120, 1_000)).expect("a session");
+
+        assert_eq!(remaining, Duration::from_mins(2));
+        assert_eq!(interval, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_session_of_zero_is_a_stop() {
+        assert_eq!(live_session(&command(0, 1_000_000, 1_000_120, 1_000)), None);
+    }
+
+    #[test]
+    fn a_session_that_already_expired_does_not_start() {
+        assert_eq!(live_session(&command(9, 1_000_000, 999_000, 1_000)), None);
+    }
+
+    #[test]
+    fn an_endless_session_is_capped() {
+        let (remaining, _) =
+            live_session(&command(9, 1_000_000, i64::MAX, 1_000)).expect("a session");
+
+        assert_eq!(remaining, MAX_LIVE_SESSION);
+    }
+
+    #[test]
+    fn a_sampling_rate_below_the_floor_is_raised_to_it() {
+        let (_, interval) = live_session(&command(9, 1_000_000, 1_000_120, 0)).expect("a session");
+
+        assert_eq!(interval, MIN_LIVE_INTERVAL);
     }
 }

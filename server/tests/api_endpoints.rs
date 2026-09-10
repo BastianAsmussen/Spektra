@@ -1,6 +1,5 @@
 #![expect(
     clippy::expect_used,
-    clippy::arithmetic_side_effects,
     reason = "test harness helpers are not `#[test]` functions, so clippy.toml's in-tests allowances do not reach them"
 )]
 
@@ -9,7 +8,7 @@ mod common;
 use common::test_pool;
 
 use axum::{Router, body::Body, http::Request};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use diesel::RunQueryDsl;
 use futures_util::StreamExt;
 use http_body_util::BodyExt;
@@ -21,12 +20,9 @@ use protocol::v1::{
 use serde_json::json;
 use server::api::{health, nodes, pages, ws};
 use server::db::models::nodes::NewNode;
-use server::db::models::sessions::NewSession;
-use server::db::models::users::NewUser;
 use server::db::schema::{
     measurements as measurements_schema, node_credentials as node_credentials_schema,
-    node_health as node_health_schema, nodes as nodes_schema, sessions as sessions_schema,
-    users as users_schema,
+    node_health as node_health_schema, nodes as nodes_schema,
 };
 use server::grpc::Ingest;
 use server::state::{AppState, NodeEvent};
@@ -80,22 +76,7 @@ async fn connect_ws(
 }
 
 async fn seed_user(pool: &deadpool_diesel::postgres::Pool, email: &str) -> i64 {
-    let conn = pool.get().await.expect("seed connection");
-    let new_user = NewUser {
-        email: email.to_owned(),
-        password_hash: "test-hash".to_owned(),
-        full_name: "Test User".to_owned(),
-        role_id: 1,
-    };
-    conn.interact(move |conn| {
-        diesel::insert_into(users_schema::table)
-            .values(&new_user)
-            .returning(users_schema::id)
-            .get_result(conn)
-    })
-    .await
-    .expect("seed interact failed")
-    .expect("seed user failed")
+    common::seed_user(pool, email, "Test User", 1, "test-hash").await
 }
 
 async fn seed_user_with_role(
@@ -103,22 +84,7 @@ async fn seed_user_with_role(
     email: &str,
     role_id: i64,
 ) -> i64 {
-    let conn = pool.get().await.expect("seed connection");
-    let new_user = NewUser {
-        email: email.to_owned(),
-        password_hash: "test-hash".to_owned(),
-        full_name: "Test Technician".to_owned(),
-        role_id,
-    };
-    conn.interact(move |conn| {
-        diesel::insert_into(users_schema::table)
-            .values(&new_user)
-            .returning(users_schema::id)
-            .get_result(conn)
-    })
-    .await
-    .expect("seed interact failed")
-    .expect("seed user failed")
+    common::seed_user(pool, email, "Test Technician", role_id, "test-hash").await
 }
 
 async fn seed_dispatch(pool: &deadpool_diesel::postgres::Pool, technician_id: i64) -> i64 {
@@ -192,23 +158,6 @@ async fn assign_channel(
     })
     .await
     .expect("seed interact failed");
-}
-
-async fn seed_session(pool: &deadpool_diesel::postgres::Pool, user_id: i64, token: &str) {
-    let conn = pool.get().await.expect("seed connection");
-    let new_session = NewSession {
-        token: token.to_owned(),
-        user_id,
-        expires_at: (Utc::now() + Duration::hours(1)).naive_utc(),
-    };
-    conn.interact(move |conn| {
-        diesel::insert_into(sessions_schema::table)
-            .values(&new_session)
-            .execute(conn)
-    })
-    .await
-    .expect("seed interact failed")
-    .expect("seed session failed");
 }
 
 async fn seed_node(pool: &deadpool_diesel::postgres::Pool, identity: &str, name: &str) {
@@ -344,7 +293,7 @@ async fn nodes_endpoint_requires_auth() {
 async fn nodes_endpoint_lists_nodes() {
     let pool = test_pool("api", "nodes_list").await;
     let user_id = seed_user(&pool, "nodes-list@test").await;
-    seed_session(&pool, user_id, "nodes-list-token").await;
+    common::seed_session(&pool, user_id, "nodes-list-token").await;
     seed_node(&pool, "nodes-list-node", "Listed Node").await;
 
     let response = app(AppState::new(pool))
@@ -509,17 +458,6 @@ fn valid_health() -> HealthReport {
     }
 }
 
-fn authorized<T>(message: T, credential: &str) -> tonic::Request<T> {
-    let mut request = tonic::Request::new(message);
-    request.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {credential}")
-            .parse()
-            .expect("credential is a valid metadata value"),
-    );
-    request
-}
-
 async fn registered_node(ingest: &Ingest, identity: &str) -> (i64, String) {
     let (_, credential) = plan_node(&ingest.state.pool, identity).await;
     let response = ingest
@@ -574,7 +512,7 @@ async fn submit_measurements_rejects_unknown_credential() {
     let ingest = Ingest::new(AppState::new(pool));
 
     let status = ingest
-        .submit_measurements(authorized(valid_report(), "not-a-real-credential"))
+        .submit_measurements(bearer(valid_report(), "not-a-real-credential"))
         .await
         .expect_err("an unknown credential must be rejected");
 
@@ -588,7 +526,7 @@ async fn submit_measurements_persists_one_row_per_reading() {
     let (node_id, credential) = registered_node(&ingest, "measure-persist-node").await;
 
     let ack = ingest
-        .submit_measurements(authorized(valid_report(), &credential))
+        .submit_measurements(bearer(valid_report(), &credential))
         .await
         .expect("measurement report")
         .into_inner();
@@ -622,11 +560,11 @@ async fn submit_measurements_is_idempotent_under_backfill() {
 
     let report = valid_report();
     ingest
-        .submit_measurements(authorized(report.clone(), &credential))
+        .submit_measurements(bearer(report.clone(), &credential))
         .await
         .expect("first delivery");
     let ack = ingest
-        .submit_measurements(authorized(report, &credential))
+        .submit_measurements(bearer(report, &credential))
         .await
         .expect("resent delivery")
         .into_inner();
@@ -658,7 +596,7 @@ async fn submit_measurements_rejects_suspended_node() {
     .expect("suspend");
 
     let status = ingest
-        .submit_measurements(authorized(valid_report(), &credential))
+        .submit_measurements(bearer(valid_report(), &credential))
         .await
         .expect_err("a suspended node must be rejected");
 
@@ -674,7 +612,7 @@ async fn report_health_persists_and_deduplicates() {
 
     let report = valid_health();
     let ack = ingest
-        .report_health(authorized(report.clone(), &credential))
+        .report_health(bearer(report.clone(), &credential))
         .await
         .expect("health report")
         .into_inner();
@@ -683,7 +621,7 @@ async fn report_health_persists_and_deduplicates() {
     assert_eq!(count_health(&pool).await, 1);
 
     ingest
-        .report_health(authorized(report, &credential))
+        .report_health(bearer(report, &credential))
         .await
         .expect("resent health report");
 
@@ -729,7 +667,7 @@ async fn websocket_rejects_a_connection_without_a_session() {
 async fn websocket_pushes_node_events_to_an_authenticated_client() {
     let pool = test_pool("api", "ws_push").await;
     let user_id = seed_user(&pool, "operator@example.com").await;
-    seed_session(&pool, user_id, "ws-push-token").await;
+    common::seed_session(&pool, user_id, "ws-push-token").await;
 
     let state = AppState::new(pool);
     let addr = serve(state.clone()).await;
@@ -765,7 +703,7 @@ async fn websocket_pushes_node_events_to_an_authenticated_client() {
 async fn websocket_hides_nodes_a_technician_was_not_dispatched_to() {
     let pool = test_pool("api", "ws_filter").await;
     let technician_id = seed_user_with_role(&pool, "technician@example.com", 3).await;
-    seed_session(&pool, technician_id, "ws-filter-token").await;
+    common::seed_session(&pool, technician_id, "ws-filter-token").await;
     seed_node(&pool, "dispatched", "Dispatched node").await;
     let dispatched_node_id = seed_dispatch(&pool, technician_id).await;
 
@@ -812,7 +750,7 @@ async fn channel_plan_is_empty_for_an_unassigned_node() {
         .into_inner();
 
     let plan = ingest
-        .get_channel_plan(authorized(
+        .get_channel_plan(bearer(
             protocol::v1::ChannelPlanRequest {
                 protocol_version: "1".to_owned(),
                 known_plan_version: 0,
@@ -850,7 +788,7 @@ async fn channel_plan_serves_assignments_and_bumps_its_version() {
     .await;
 
     let plan = ingest
-        .get_channel_plan(authorized(
+        .get_channel_plan(bearer(
             protocol::v1::ChannelPlanRequest {
                 protocol_version: "1".to_owned(),
                 known_plan_version: 0,
@@ -888,4 +826,163 @@ async fn channel_plan_rejects_an_unauthenticated_caller() {
         .expect_err("an unauthenticated plan request must be rejected");
 
     assert_eq!(status.code(), tonic::Code::Unauthenticated);
+}
+
+fn live_sample(session_id: u64) -> protocol::v1::LiveSample {
+    protocol::v1::LiveSample {
+        protocol_version: "1".to_owned(),
+        session_id,
+        measured_at: Some(std::time::SystemTime::now().into()),
+        frequency_hz: 96_500_000,
+        modulation: i32::from(protocol::v1::Modulation::Fm),
+        label: "DR P4".to_owned(),
+        readings: vec![protocol::v1::LiveReading {
+            metric: i32::from(protocol::v1::Metric::SignalStrength),
+            value: -42.0,
+        }],
+    }
+}
+
+#[tokio::test]
+async fn a_live_session_reaches_a_watching_node_and_its_samples_are_never_stored() {
+    let pool = test_pool("api", "live_session").await;
+    let ingest = Ingest::new(AppState::new(pool.clone()));
+    let (node_id, credential) = registered_node(&ingest, "live-node").await;
+
+    let mut commands = ingest
+        .watch_live(bearer(
+            protocol::v1::LiveWatchRequest {
+                protocol_version: "1".to_owned(),
+            },
+            &credential,
+        ))
+        .await
+        .expect("a command stream")
+        .into_inner();
+
+    assert_eq!(ingest.state.live.open(node_id), server::live::Reach::Told);
+
+    let command = commands
+        .next()
+        .await
+        .expect("the stream is open")
+        .expect("a command");
+    assert_ne!(command.session_id, 0, "the node was told to stop");
+
+    let before = count_measurements(&pool).await;
+    let ack = ingest
+        .submit_live(bearer(live_sample(command.session_id), &credential))
+        .await
+        .expect("the sample is accepted")
+        .into_inner();
+
+    assert_eq!(
+        ack.session_id, command.session_id,
+        "the node was told to stop a session it is running"
+    );
+    assert_eq!(
+        count_measurements(&pool).await,
+        before,
+        "a live sample was persisted"
+    );
+}
+
+#[tokio::test]
+async fn a_sample_for_a_session_nobody_asked_for_is_answered_with_a_stop() {
+    let pool = test_pool("api", "live_stale").await;
+    let ingest = Ingest::new(AppState::new(pool));
+    let (_, credential) = registered_node(&ingest, "stale-node").await;
+
+    let ack = ingest
+        .submit_live(bearer(live_sample(7), &credential))
+        .await
+        .expect("the sample is taken and refused politely")
+        .into_inner();
+
+    assert_eq!(ack.session_id, 0, "a forgotten session was believed");
+}
+
+#[tokio::test]
+async fn an_expired_live_session_stops_being_accepted() {
+    let pool = test_pool("api", "live_expiry").await;
+    let ingest = Ingest::new(AppState::new(pool));
+    let (node_id, credential) = registered_node(&ingest, "expiring-node").await;
+
+    let mut commands = ingest
+        .watch_live(bearer(
+            protocol::v1::LiveWatchRequest {
+                protocol_version: "1".to_owned(),
+            },
+            &credential,
+        ))
+        .await
+        .expect("a command stream")
+        .into_inner();
+    assert_eq!(ingest.state.live.open(node_id), server::live::Reach::Told);
+    let session_id = commands
+        .next()
+        .await
+        .expect("the stream is open")
+        .expect("a command")
+        .session_id;
+
+    ingest.state.live.close(node_id);
+
+    let ack = ingest
+        .submit_live(bearer(live_sample(session_id), &credential))
+        .await
+        .expect("the sample is taken")
+        .into_inner();
+
+    assert_eq!(ack.session_id, 0, "a closed session still took samples");
+}
+
+#[tokio::test]
+async fn a_live_sample_outside_its_metric_range_is_rejected() {
+    let pool = test_pool("api", "live_range").await;
+    let ingest = Ingest::new(AppState::new(pool));
+    let (_, credential) = registered_node(&ingest, "range-node").await;
+
+    let mut sample = live_sample(1);
+    sample.readings[0].value = 12.0;
+
+    let status = ingest
+        .submit_live(bearer(sample, &credential))
+        .await
+        .expect_err("an impossible reading must be rejected");
+
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn the_ack_carries_the_cadence_the_node_row_asks_for() {
+    let pool = test_pool("api", "live_cadence").await;
+    let ingest = Ingest::new(AppState::new(pool.clone()));
+    let (node_id, credential) = registered_node(&ingest, "cadence-node").await;
+
+    let conn = pool.get().await.expect("connection");
+    conn.interact(move |conn| {
+        use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
+
+        diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(node_id)))
+            .set(nodes_schema::report_interval_seconds.eq(10))
+            .execute(conn)
+    })
+    .await
+    .expect("update interact")
+    .expect("update");
+
+    let ack = ingest
+        .submit_measurements(bearer(valid_report(), &credential))
+        .await
+        .expect("the report is accepted")
+        .into_inner();
+
+    let delay = protocol::schedule_delay(ack.schedule.as_ref(), ack.server_time.as_ref())
+        .expect("a schedule");
+
+    assert!(
+        delay <= std::time::Duration::from_secs(10),
+        "a node on a ten second cadence was told to wait {delay:?}"
+    );
 }

@@ -137,9 +137,9 @@ impl PreparedReport {
 
     /// Persist the report and mark the node as seen, in one transaction.
     ///
-    ///
     /// # Errors
     ///
+    /// Returns the diesel error if any statement fails.
     pub fn write(&self, conn: &mut PgConnection, node_id: i64) -> QueryResult<usize> {
         conn.transaction(|conn| {
             let channel_ids = self.resolve_channels(conn)?;
@@ -156,7 +156,6 @@ impl PreparedReport {
         })
     }
 
-    ///
     fn resolve_channels(&self, conn: &mut PgConnection) -> QueryResult<Vec<i64>> {
         let frequencies: Vec<i64> = self
             .channels
@@ -224,6 +223,7 @@ impl PreparedReport {
 ///
 /// # Errors
 ///
+/// Returns [`Status::invalid_argument`] if `measured_at` is missing or not representable.
 pub fn health_row(node_id: i64, report: &wire::HealthReport) -> Result<NewNodeHealth, Status> {
     let measured_at = report
         .measured_at
@@ -244,9 +244,9 @@ pub fn health_row(node_id: i64, report: &wire::HealthReport) -> Result<NewNodeHe
 
 /// Persist a health report and mark the node as seen, in one transaction.
 ///
-///
 /// # Errors
 ///
+/// Returns the diesel error if any statement fails.
 pub fn write_health(conn: &mut PgConnection, row: &NewNodeHealth) -> QueryResult<usize> {
     let node_id = row.node_id;
     conn.transaction(|conn| {
@@ -287,7 +287,6 @@ pub struct PlannedChannel {
 }
 
 /// Load a node's channel plan and the version it was issued at.
-///
 ///
 /// # Errors
 ///
@@ -335,11 +334,8 @@ const fn wire_modulation(value: Modulation) -> wire::Modulation {
     }
 }
 
-///
 const TOUCH_AFTER_SECONDS: i64 = 5;
 
-///
-///
 fn touch_node(conn: &mut PgConnection, node_id: i64) -> QueryResult<usize> {
     let now = Utc::now().naive_utc();
     let stale = now
@@ -360,7 +356,11 @@ fn touch_node(conn: &mut PgConnection, node_id: i64) -> QueryResult<usize> {
 }
 
 /// Translate a protobuf timestamp into the storage type.
-fn naive_utc(seconds: i64, nanos: i32, field: &str) -> Result<NaiveDateTime, Status> {
+///
+/// # Errors
+///
+/// Returns [`Status::invalid_argument`] if the stamp is negative or not representable.
+pub fn naive_utc(seconds: i64, nanos: i32, field: &str) -> Result<NaiveDateTime, Status> {
     let nanos = u32::try_from(nanos)
         .map_err(|_| Status::invalid_argument(format!("{field}.nanos must not be negative")))?;
 
@@ -370,7 +370,11 @@ fn naive_utc(seconds: i64, nanos: i32, field: &str) -> Result<NaiveDateTime, Sta
 }
 
 /// Translate a wire metric onto its stored counterpart.
-fn metric(value: i32) -> Result<Metric, Status> {
+///
+/// # Errors
+///
+/// Returns [`Status::invalid_argument`] for a number that is not a known metric.
+pub fn metric(value: i32) -> Result<Metric, Status> {
     match wire::Metric::try_from(value) {
         Ok(wire::Metric::SignalStrength) => Ok(Metric::SignalStrength),
         Ok(wire::Metric::SignalToNoise) => Ok(Metric::SignalToNoise),

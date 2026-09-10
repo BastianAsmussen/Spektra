@@ -1,9 +1,12 @@
+// Spektra v1 ingest; bearer in metadata except RegisterNode.
+
 syntax = "proto3";
 
 package spektra.v1;
 
 import "v1/channel.proto";
 import "v1/health.proto";
+import "v1/live.proto";
 import "v1/measurement.proto";
 import "v1/node.proto";
 
@@ -19,4 +22,10 @@ service NodeIngest {
 
   // The channels this node is assigned to monitor. (See channel.proto)
   rpc GetChannelPlan(ChannelPlanRequest) returns (ChannelPlan);
+
+  // Live inspection command stream. (See live.proto)
+  rpc WatchLive(LiveWatchRequest) returns (stream LiveCommand);
+
+  // Live inspection sample that is never persisted. (See live.proto)
+  rpc SubmitLive(LiveSample) returns (LiveAck);
 }

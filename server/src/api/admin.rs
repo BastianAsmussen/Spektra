@@ -23,6 +23,10 @@ const MAX_EMAIL_CHARS: usize = 320;
 
 const MIN_PASSWORD_CHARS: usize = 12;
 
+pub const MIN_REPORT_INTERVAL: i32 = 5;
+
+pub const MAX_REPORT_INTERVAL: i32 = 300;
+
 /// All routes under `/api/users`, plus the node suspension the fleet needs.
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -415,6 +419,7 @@ pub struct NodeUpdate {
     pub longitude: Option<f64>,
     /// Administrators only, since owning a node grants the right to edit it.
     pub owner_id: Option<i64>,
+    pub report_interval_seconds: Option<i32>,
 }
 
 /// A credential, shown once.
@@ -635,6 +640,15 @@ pub async fn update_node(
     };
     check_position(request.latitude, request.longitude)?;
 
+    let interval = match request.report_interval_seconds {
+        Some(seconds) if !(MIN_REPORT_INTERVAL..=MAX_REPORT_INTERVAL).contains(&seconds) => {
+            return Err(ApiError::UnprocessableEntity(format!(
+                "A report interval must be between {MIN_REPORT_INTERVAL} and {MAX_REPORT_INTERVAL} seconds."
+            )));
+        }
+        other => other,
+    };
+
     let owner_id = request.owner_id;
     let (latitude, longitude) = (request.latitude, request.longitude);
     let conn = state.pool.get().await?;
@@ -655,6 +669,11 @@ pub async fn update_node(
                 if let Some(owner_id) = owner_id {
                     diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
                         .set(nodes_schema::owner_id.eq((owner_id != 0).then_some(owner_id)))
+                        .execute(conn)?;
+                }
+                if let Some(interval) = interval {
+                    diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
+                        .set(nodes_schema::report_interval_seconds.eq(interval))
                         .execute(conn)?;
                 }
 

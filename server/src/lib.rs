@@ -2,6 +2,7 @@ pub mod api;
 pub mod db;
 pub mod grpc;
 pub mod jobs;
+pub mod live;
 pub mod notify;
 pub mod ops;
 pub mod state;

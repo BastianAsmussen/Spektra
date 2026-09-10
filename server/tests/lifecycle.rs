@@ -1,6 +1,5 @@
 #![expect(
     clippy::expect_used,
-    clippy::arithmetic_side_effects,
     reason = "test harness helpers are not `#[test]` functions, so clippy.toml's in-tests allowances do not reach them"
 )]
 
@@ -11,19 +10,13 @@ use common::{Pool, test_pool};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::{Router, response::Response};
-use chrono::{Duration, Utc};
 use diesel::prelude::*;
 use http_body_util::BodyExt as _;
 use serde_json::{Value, json};
-use server::api::{alarms, work_orders};
+use server::api::{alarms, nodes, work_orders};
 use server::db::models::enums::{AlarmState, Metric};
 use server::db::models::nodes::NewNode;
-use server::db::models::sessions::NewSession;
-use server::db::models::users::NewUser;
-use server::db::schema::{
-    alarms as alarms_schema, nodes as nodes_schema, sessions as sessions_schema,
-    users as users_schema,
-};
+use server::db::schema::{alarms as alarms_schema, nodes as nodes_schema};
 use server::state::AppState;
 use tower::ServiceExt as _;
 
@@ -36,42 +29,14 @@ fn app(state: AppState) -> Router {
     Router::new()
         .merge(alarms::routes())
         .merge(work_orders::routes())
+        .merge(nodes::routes())
         .with_state(state)
 }
 
 async fn seed_actor(pool: &Pool, email: &str, role_id: i64) -> (i64, String) {
-    let conn = pool.get().await.expect("seed connection");
-    let new_user = NewUser {
-        email: email.to_owned(),
-        password_hash: "test-hash".to_owned(),
-        full_name: "Test User".to_owned(),
-        role_id,
-    };
-    let user_id: i64 = conn
-        .interact(move |conn| {
-            diesel::insert_into(users_schema::table)
-                .values(&new_user)
-                .returning(users_schema::id)
-                .get_result(conn)
-        })
-        .await
-        .expect("seed interact failed")
-        .expect("seed user failed");
-
+    let user_id = common::seed_user(pool, email, "Test User", role_id, "test-hash").await;
     let token = format!("token-{email}");
-    let session = NewSession {
-        token: token.clone(),
-        user_id,
-        expires_at: (Utc::now() + Duration::hours(1)).naive_utc(),
-    };
-    conn.interact(move |conn| {
-        diesel::insert_into(sessions_schema::table)
-            .values(&session)
-            .execute(conn)
-    })
-    .await
-    .expect("seed interact failed")
-    .expect("seed session failed");
+    common::seed_session(pool, user_id, &token).await;
 
     (user_id, token)
 }
@@ -634,5 +599,90 @@ async fn an_administrator_sees_the_whole_fleet() {
             .await
             .status(),
         StatusCode::OK
+    );
+}
+
+async fn inspect(state: &AppState, token: &str, method: &str, node_id: i64) -> Response {
+    app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(format!("/fragments/nodes/{node_id}/inspect"))
+                .header("cookie", format!("session_token={token}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response")
+}
+
+#[tokio::test]
+async fn an_operator_may_open_and_end_a_live_session() {
+    let pool = test_pool("lifecycle", "inspect_operator").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let (_, token) = seed_actor(&pool, "operator@spektra.test", OPERATOR).await;
+    let state = AppState::new(pool);
+
+    let opened = inspect(&state, &token, "GET", node_id).await;
+
+    assert_eq!(opened.status(), StatusCode::OK);
+    assert!(state.live.is_open(node_id), "no session was opened");
+
+    let ended = inspect(&state, &token, "DELETE", node_id).await;
+
+    assert_eq!(ended.status(), StatusCode::OK);
+    assert!(
+        !state.live.is_open(node_id),
+        "the session outlived the panel"
+    );
+}
+
+#[tokio::test]
+async fn a_reader_may_not_ask_a_node_to_sample_for_them() {
+    let pool = test_pool("lifecycle", "inspect_reader").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let (_, token) = seed_actor(&pool, "reader@spektra.test", READER).await;
+    let state = AppState::new(pool);
+
+    let response = inspect(&state, &token, "GET", node_id).await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!state.live.is_open(node_id), "a reader opened a session");
+}
+
+#[tokio::test]
+async fn a_technician_may_not_inspect_a_node_they_were_not_sent_to() {
+    let pool = test_pool("lifecycle", "inspect_technician").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let (_, token) = seed_actor(&pool, "tech@spektra.test", TECHNICIAN).await;
+    let state = AppState::new(pool);
+
+    let response = inspect(&state, &token, "GET", node_id).await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(!state.live.is_open(node_id));
+}
+
+#[tokio::test]
+async fn renewing_says_whether_the_node_is_listening() {
+    let pool = test_pool("lifecycle", "inspect_renew").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let (_, token) = seed_actor(&pool, "admin@spektra.test", ADMINISTRATOR).await;
+    let state = AppState::new(pool);
+
+    let response = inspect(&state, &token, "POST", node_id).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("body")
+        .to_bytes();
+    assert_eq!(
+        String::from_utf8_lossy(&body),
+        "noden lytter ikke",
+        "an unreachable node was reported as measuring"
     );
 }
