@@ -54,7 +54,7 @@ tonic-build = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.7", features = ["fs", "set-header"] }
+tower-http = { version = "0.7", features = ["fs", "set-header", "compression-gzip", "compression-zstd"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 utoipa = { version = "5", features = ["axum_extras", "chrono"] }
