@@ -7,12 +7,12 @@
 {% block body_attrs %} hx-ext="ws" ws-connect="/api/ws"{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="/static/leaflet.css">
-<link rel="stylesheet" href="/static/uplot.css">
-<script src="/static/leaflet.js" defer></script>
-<script src="/static/uplot.js" defer></script>
-<script src="/static/charts.js" defer></script>
-<script src="/static/map.js" defer></script>
+<link rel="stylesheet" href="{{ "/static/leaflet.css"|v }}">
+<link rel="stylesheet" href="{{ "/static/uplot.css"|v }}">
+<script src="{{ "/static/leaflet.js"|v }}" defer></script>
+<script src="{{ "/static/uplot.js"|v }}" defer></script>
+<script src="{{ "/static/charts.js"|v }}" defer></script>
+<script src="{{ "/static/map.js"|v }}" defer></script>
 {% endblock %}
 
 {% block chrome %}{% include "fragments/header.html" %}{% endblock %}

@@ -18,7 +18,6 @@ use protocol::v1::{
     MetricReading, Modulation, NodeRegistrationRequest, SampleStats,
 };
 use serde_json::json;
-use server::api::{health, nodes, pages, ws};
 use server::db::models::nodes::NewNode;
 use server::db::schema::{
     measurements as measurements_schema, node_credentials as node_credentials_schema,
@@ -28,15 +27,11 @@ use server::grpc::Ingest;
 use server::state::{AppState, NodeEvent};
 use tower::ServiceExt;
 
-fn app(state: AppState) -> Router {
-    Router::new()
-        .merge(health::routes())
-        .merge(nodes::routes())
-        .merge(pages::routes())
-        .merge(ws::routes())
-        .with_state(state)
+fn app(state: AppState) -> Router<()> {
+    server::web::router(state)
 }
 
+/// Real listener; `oneshot` cannot exercise a WebSocket upgrade.
 async fn serve(state: AppState) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -318,6 +313,65 @@ async fn nodes_endpoint_lists_nodes() {
     let nodes = json.as_array().expect("node array");
     assert_eq!(nodes.len(), 1);
     assert_eq!(nodes[0]["name"], "Listed Node");
+}
+
+#[tokio::test]
+async fn static_assets_are_cached_immutably_but_pages_are_not() {
+    let pool = test_pool("api", "cache_policy").await;
+    let dir = std::env::temp_dir().join(format!("spektra-static-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp static dir");
+    std::fs::write(dir.join("app.css"), "uncompressed").expect("asset");
+    std::fs::write(dir.join("app.css.br"), "not brotli").expect("br variant");
+    std::fs::write(dir.join("app.css.gz"), "not gzip").expect("gz variant");
+
+    let app =
+        server::web::router_with_static(AppState::new(pool), dir.to_str().expect("utf-8 path"));
+
+    let css = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/static/app.css")
+                .header("accept-encoding", "br")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(css.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        css.headers().get("content-encoding").expect("encoding"),
+        "br"
+    );
+    assert_eq!(
+        css.headers().get("cache-control").expect("cache policy"),
+        "public, max-age=31536000, immutable"
+    );
+    assert!(
+        css.headers()
+            .get("vary")
+            .expect("vary")
+            .to_str()
+            .expect("ascii")
+            .contains("accept-encoding")
+    );
+
+    let page = app
+        .oneshot(
+            Request::builder()
+                .uri("/login")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(page.status(), axum::http::StatusCode::OK);
+    assert_eq!(
+        page.headers().get("cache-control").expect("cache policy"),
+        "no-store"
+    );
 }
 
 #[tokio::test]

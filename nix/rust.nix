@@ -100,7 +100,12 @@
         static =
           pkgs.runCommand "spektra-static"
             {
-              nativeBuildInputs = [ pkgs.tailwindcss_4 ];
+              nativeBuildInputs = with pkgs; [
+                tailwindcss_4
+                brotli
+                gzip
+              ];
+
               meta = {
                 description = "Spektra web client assets: stylesheet, Leaflet, HTMX.";
                 license = lib.licenses.mit;
@@ -112,6 +117,11 @@
               tailwindcss -i ${styleSource}/assets/app.css -o "$out/app.css" --minify
               install -Dm444 ${styleSource}/assets/*.js "$out/"
               install -Dm444 ${styleSource}/assets/vendor/* "$out/"
+
+              for f in "$out"/*; do
+                brotli -q 11 -k "$f"
+                gzip -9 -k "$f"
+              done
             '';
 
         server = crate {
@@ -155,8 +165,10 @@
       devShells.default = craneLib.devShell {
         inputsFrom = [ cargoArtifacts ];
         packages = with pkgs; [
+          brotli
           cargo-bloat
           cargo-nextest
+          gzip
           rust-analyzer
           diesel-cli
           protobuf
@@ -166,12 +178,28 @@
           tailwindcss_4
           (writeShellScriptBin "spektra-static" ''
             set -euo pipefail
+
             root="$(git rev-parse --show-toplevel)"
             out="$root/server/assets/dist"
+
             mkdir -p "$out"
             cp -f "$root"/server/assets/vendor/* "$root"/server/assets/*.js "$out/"
-            exec ${lib.getExe tailwindcss_4} \
-              -i "$root/server/assets/app.css" -o "$out/app.css" "$@"
+
+            watch=0
+            for arg in "$@"; do
+              if [ "$arg" = "--watch" ]; then watch=1; fi
+            done
+
+            ${lib.getExe tailwindcss_4} -i "$root/server/assets/app.css" -o "$out/app.css"
+            for f in "$out"/*; do
+              brotli -q 11 -k "$f"
+              gzip -9 -k "$f"
+            done
+
+            if [ "$watch" = 1 ]; then
+              exec ${lib.getExe tailwindcss_4} \
+                -i "$root/server/assets/app.css" -o "$out/app.css" --watch
+            fi
           '')
           soapysdr-with-plugins
         ];

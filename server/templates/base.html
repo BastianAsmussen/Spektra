@@ -4,10 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Spektra{% endblock %}</title>
-    <link rel="stylesheet" href="/static/app.css">
-    {#- Ahead of the stylesheet's paint rather than deferred with the rest: a
-        saved dark preference that arrives after first paint is a white flash
-        in the reader's face every single navigation. -#}
+    <link rel="stylesheet" href="{{ "/static/app.css"|v }}">
     <script>
       (() => {
         try {
@@ -18,9 +15,9 @@
         } catch { }
       })();
     </script>
-    <script src="/static/htmx.js" defer></script>
-    <script src="/static/htmx-ext-ws.js" defer></script>
-    <script src="/static/chrome.js" defer></script>
+    <script src="{{ "/static/htmx.js"|v }}" defer></script>
+    <script src="{{ "/static/htmx-ext-ws.js"|v }}" defer></script>
+    <script src="{{ "/static/chrome.js"|v }}" defer></script>
     {% block head %}{% endblock %}
   </head>
   <body class="flex h-full flex-col bg-canvas text-text"{% block body_attrs %}{% endblock %}>

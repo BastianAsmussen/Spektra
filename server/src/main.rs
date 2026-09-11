@@ -1,23 +1,18 @@
-use axum::Router;
 use color_eyre::Result;
 use color_eyre::eyre::{WrapErr, eyre};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
-use server::api::{admin, alarms, auth, health, nodes, ops, pages, series, work_orders, ws};
+use server::api::{admin, alarms, auth, health, nodes, ops, series, work_orders};
 use server::grpc;
 use server::jobs;
 use server::notify::Ntfy;
 use server::state::AppState;
-use tower_http::services::ServeDir;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations/");
 
-const DEFAULT_STATIC_DIR: &str = "server/assets/dist";
-
 const WEB_POOL_SIZE: usize = 4;
-
 const INGEST_POOL_SIZE: usize = 8;
 
 #[derive(OpenApi)]
@@ -140,7 +135,6 @@ async fn main() -> Result<()> {
     }
 
     let state = AppState::new(pool).with_ingest_pool(ingest_pool);
-
     tokio::spawn(jobs::run(state.clone()));
 
     let notifier = Ntfy::from_env();
@@ -148,30 +142,14 @@ async fn main() -> Result<()> {
         tracing::info!("ntfy is not configured; alarms go to the live channel only");
     }
     tokio::spawn(jobs::detect(state.clone(), notifier));
-
     tokio::spawn(jobs::sample_throughput(state.clone()));
 
-    let app = Router::new()
-        .merge(health::routes())
-        .merge(nodes::routes())
-        .merge(alarms::routes())
-        .merge(alarms::fragments::routes())
-        .merge(work_orders::routes())
-        .merge(work_orders::fragments::routes())
-        .merge(ops::routes())
-        .merge(series::routes())
-        .merge(pages::routes())
-        .merge(admin::routes())
-        .merge(admin::fragments::routes())
-        .merge(auth::routes())
-        .merge(ws::routes())
-        .nest_service("/static", static_files())
+    let app = server::web::router(state.clone())
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             ops::measure,
-        ))
-        .with_state(state.clone());
+        ));
 
     let grpc_addr_raw =
         std::env::var("GRPC_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:50051".to_owned());
@@ -213,21 +191,6 @@ fn build_pool(db_url: &str, size: usize) -> Result<deadpool_diesel::postgres::Po
         .max_size(size)
         .build()
         .map_err(Into::into)
-}
-
-fn static_files() -> ServeDir {
-    let dir = std::env::var("SPEKTRA_STATIC_DIR").unwrap_or_else(|_| DEFAULT_STATIC_DIR.to_owned());
-
-    if std::path::Path::new(&dir).is_dir() {
-        tracing::info!(directory = %dir, "serving web client assets");
-    } else {
-        tracing::warn!(
-            directory = %dir,
-            "SPEKTRA_STATIC_DIR does not exist; the dashboard will load unstyled"
-        );
-    }
-
-    ServeDir::new(dir)
 }
 
 async fn shutdown_signal() {

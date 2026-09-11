@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use askama::Template;
 use chrono::NaiveDateTime;
 use serde::Serialize;
@@ -6,9 +8,53 @@ use crate::api::admin::UserSummary;
 
 const ZONE: chrono_tz::Tz = chrono_tz::Europe::Copenhagen;
 
+/// The `?v=` token on asset URLs.
+#[must_use]
+pub fn static_token() -> &'static str {
+    static TOKEN: OnceLock<String> = OnceLock::new();
+
+    TOKEN.get_or_init(|| {
+        std::env::var("SPEKTRA_STATIC_DIR").map_or_else(
+            |_| start_time_token(),
+            |dir| store_hash_token(&dir).unwrap_or_else(start_time_token),
+        )
+    })
+}
+
+fn store_hash_token(dir: &str) -> Option<String> {
+    dir.strip_prefix("/nix/store/")?
+        .split('-')
+        .next()
+        .filter(|hash| !hash.is_empty())
+        .map(str::to_owned)
+}
+
+fn start_time_token() -> String {
+    std::time::UNIX_EPOCH
+        .elapsed()
+        .map_or_else(|_| "0".to_owned(), |elapsed| elapsed.as_secs().to_string())
+}
+
+/// Custom filters, resolved by name from the templates beside them.
+#[expect(
+    clippy::inline_always,
+    clippy::missing_errors_doc,
+    reason = "askama's filter_fn generates the Result-returning execute with inline(always), out of reach of the fn's own attributes"
+)]
+pub mod filters {
+    /// Append `?v=<static token>` to an asset URL.
+    #[askama::filter_fn]
+    pub fn v<T: std::fmt::Display>(input: T, _: &dyn askama::Values) -> askama::Result<String> {
+        Ok(format!("{input}?v={}", super::static_token()))
+    }
+}
+
+/// One instant, in machine and display form.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Stamp {
+    /// RFC 3339, for the `datetime` attribute.
     pub machine: String,
+    /// `yyyy-mm-dd HH:MM` in Danish local time.
     pub text: String,
 }
 
@@ -37,6 +83,7 @@ pub fn stamp_or_empty(at: Option<NaiveDateTime>) -> Stamp {
     at.map(stamp).unwrap_or_default()
 }
 
+/// One node as the dashboard draws it.
 #[derive(Debug, Serialize)]
 pub struct NodeTile {
     pub id: i64,
@@ -48,6 +95,7 @@ pub struct NodeTile {
     pub open_alarms: i64,
 }
 
+/// One page of the fleet list.
 #[derive(Template)]
 #[template(path = "fragments/fleet.html")]
 pub struct FleetPage {
@@ -56,6 +104,7 @@ pub struct FleetPage {
     pub first: bool,
 }
 
+/// The dashboard shell.
 #[derive(Template)]
 #[template(path = "index.html")]
 pub struct IndexTemplate {
@@ -67,6 +116,7 @@ pub struct IndexTemplate {
     pub live: bool,
 }
 
+/// Header counters and the signed-in user.
 #[derive(Debug, Default)]
 pub struct Chrome {
     pub nodes_total: i64,
@@ -77,6 +127,7 @@ pub struct Chrome {
     pub user_role: String,
 }
 
+/// Header counters, refreshed out of band.
 #[derive(Template)]
 #[template(path = "fragments/chrome_oob.html")]
 pub struct ChromeCounts {
@@ -86,6 +137,7 @@ pub struct ChromeCounts {
     pub open_orders: i64,
 }
 
+/// Live parts of one tile, swapped out of band.
 #[derive(Template)]
 #[template(path = "fragments/node_status.html")]
 pub struct NodeStatusFragment {
@@ -172,6 +224,7 @@ pub struct AdminTemplate {
     pub live: bool,
 }
 
+/// The drift page shell; numbers arrive in a fragment.
 #[derive(Template)]
 #[template(path = "drift.html")]
 pub struct DriftTemplate {
@@ -179,6 +232,7 @@ pub struct DriftTemplate {
     pub live: bool,
 }
 
+/// Every figure on the drift page.
 #[derive(Template)]
 #[template(path = "fragments/ops_tiles.html")]
 pub struct OpsTilesFragment {
@@ -237,6 +291,7 @@ pub struct AlarmList {
     pub alarms: Vec<AlarmRow>,
 }
 
+/// Placeholder the socket pushes when an alarm is raised or moved.
 #[derive(Template)]
 #[template(path = "fragments/alarm_stub.html")]
 pub struct AlarmStub {

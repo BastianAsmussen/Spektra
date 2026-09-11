@@ -5,9 +5,9 @@
 {% block title %}Drift | Spektra{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="/static/uplot.css">
-<script src="/static/uplot.js" defer></script>
-<script src="/static/charts.js" defer></script>
+<link rel="stylesheet" href="{{ "/static/uplot.css"|v }}">
+<script src="{{ "/static/uplot.js"|v }}" defer></script>
+<script src="{{ "/static/charts.js"|v }}" defer></script>
 {% endblock %}
 
 {% block chrome %}{% include "fragments/header.html" %}{% endblock %}
