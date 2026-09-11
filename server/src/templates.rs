@@ -2,6 +2,8 @@ use askama::Template;
 use chrono::NaiveDateTime;
 use serde::Serialize;
 
+use crate::api::admin::UserSummary;
+
 const ZONE: chrono_tz::Tz = chrono_tz::Europe::Copenhagen;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -61,23 +63,27 @@ pub struct IndexTemplate {
     pub shown: usize,
     pub next: String,
     pub panel: String,
-    pub nodes_total: usize,
-    pub silent: usize,
-    pub open_alarms: i64,
-    pub open_orders: i64,
-    pub user_name: String,
-    pub user_role: String,
+    pub chrome: Chrome,
     pub live: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Chrome {
-    pub nodes_total: usize,
-    pub silent: usize,
+    pub nodes_total: i64,
+    pub silent: i64,
     pub open_alarms: i64,
     pub open_orders: i64,
     pub user_name: String,
     pub user_role: String,
+}
+
+#[derive(Template)]
+#[template(path = "fragments/chrome_oob.html")]
+pub struct ChromeCounts {
+    pub nodes_total: i64,
+    pub silent: i64,
+    pub open_alarms: i64,
+    pub open_orders: i64,
 }
 
 #[derive(Template)]
@@ -93,14 +99,6 @@ pub struct NodeStatusFragment {
 #[template(path = "login.html")]
 pub struct LoginTemplate {
     pub error: Option<String>,
-}
-
-pub struct AdminUserRow {
-    pub id: i64,
-    pub email: String,
-    pub full_name: String,
-    pub role: String,
-    pub deactivated: bool,
 }
 
 /// One node as the administration page lists it.
@@ -147,7 +145,7 @@ pub struct CredentialReveal {
 #[derive(Template)]
 #[template(path = "fragments/admin_users.html")]
 pub struct AdminUsersFragment {
-    pub users: Vec<AdminUserRow>,
+    pub users: Vec<UserSummary>,
     pub roles: Vec<(&'static str, &'static str)>,
     pub current_user_id: i64,
     pub list: bool,
@@ -165,29 +163,19 @@ pub struct AdminNodesFragment {
 #[derive(Template)]
 #[template(path = "admin.html")]
 pub struct AdminTemplate {
-    pub users: Vec<AdminUserRow>,
+    pub users: Vec<UserSummary>,
     pub nodes: Vec<AdminNodeRow>,
     pub roles: Vec<(&'static str, &'static str)>,
     pub current_user_id: i64,
     pub list: bool,
-    pub nodes_total: usize,
-    pub silent: usize,
-    pub open_alarms: i64,
-    pub open_orders: i64,
-    pub user_name: String,
-    pub user_role: String,
+    pub chrome: Chrome,
     pub live: bool,
 }
 
 #[derive(Template)]
 #[template(path = "drift.html")]
 pub struct DriftTemplate {
-    pub nodes_total: usize,
-    pub silent: usize,
-    pub open_alarms: i64,
-    pub open_orders: i64,
-    pub user_name: String,
-    pub user_role: String,
+    pub chrome: Chrome,
     pub live: bool,
 }
 

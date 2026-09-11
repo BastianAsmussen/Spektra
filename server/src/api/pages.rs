@@ -11,6 +11,7 @@ use serde::Deserialize;
 use super::auth::AuthPage;
 use super::errors::ApiError;
 use super::nodes::{self, SpanQuery};
+use super::nodes::{SILENCE_AFTER_SECONDS, state_of};
 use super::visibility;
 use crate::{
     db::models::enums::{AlarmState, WorkOrderStatus},
@@ -19,14 +20,10 @@ use crate::{
         users as users_schema, work_orders as orders_schema,
     },
     state::AppState,
-    templates::{Chrome, FleetPage, IndexTemplate, NodeTile, stamp_or_empty},
+    templates::{Chrome, ChromeCounts, FleetPage, IndexTemplate, NodeTile, stamp_or_empty},
 };
 
-///
-const SILENCE_AFTER_SECONDS: i64 = 300;
-
 /// Tiles rendered per page of the fleet list.
-///
 pub const FLEET_PAGE: usize = 200;
 
 /// All page routes, plus the fleet list the dashboard pages through.
@@ -35,10 +32,10 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(index))
         .route("/nodes/{id}", get(node))
         .route("/fragments/fleet", get(fleet_page))
+        .route("/fragments/chrome", get(chrome_counts))
 }
 
 /// What the fleet list is asked for.
-///
 #[derive(Debug, Default, Deserialize)]
 pub struct FleetQuery {
     pub q: Option<String>,
@@ -116,7 +113,6 @@ async fn index(auth: AuthPage, State(state): State<AppState>) -> Result<Html<Str
     dashboard(auth, state, None, SpanQuery::default()).await
 }
 
-///
 async fn node(
     auth: AuthPage,
     State(state): State<AppState>,
@@ -135,7 +131,6 @@ type FleetRow = (
     Option<f64>,
 );
 
-///
 async fn dashboard(
     auth: AuthPage,
     state: AppState,
@@ -164,12 +159,7 @@ async fn dashboard(
     let html = IndexTemplate {
         shown,
         next,
-        nodes_total: chrome.nodes_total,
-        silent: chrome.silent,
-        open_alarms: chrome.open_alarms,
-        open_orders: chrome.open_orders,
-        user_name: chrome.user_name,
-        user_role: chrome.user_role,
+        chrome,
         nodes,
         panel,
         live: true,
@@ -180,7 +170,6 @@ async fn dashboard(
     Ok(Html(html))
 }
 
-///
 async fn fleet(
     state: &AppState,
     visible: Option<Vec<i64>>,
@@ -237,7 +226,7 @@ async fn fleet(
             |(id, name, suspended, last_seen_at, latitude, longitude)| NodeTile {
                 id,
                 name,
-                state: initial_state(suspended, last_seen_at, now),
+                state: state_of(suspended, last_seen_at, now),
                 at: stamp_or_empty(last_seen_at),
                 latitude,
                 longitude,
@@ -249,17 +238,97 @@ async fn fleet(
     Ok((nodes, open))
 }
 
+/// Header counters for a page that is not the dashboard.
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the session points at a missing user or the database fails.
 pub async fn chrome_for(state: &AppState, user_id: i64) -> Result<Chrome, ApiError> {
     let access = visibility::resolve(state, user_id).await?;
-    let (nodes, open) = fleet(state, access.visibility.node_filter()).await?;
+    let counts = counts(state, &access).await?;
 
-    chrome(state, user_id, &nodes, &open).await
+    let conn = state.pool.get().await?;
+    let (user_name, user_role): (String, String) = conn
+        .interact(move |conn| {
+            users_schema::table
+                .inner_join(roles_schema::table)
+                .filter(users_schema::id.eq(user_id))
+                .select((users_schema::full_name, roles_schema::name))
+                .first(conn)
+        })
+        .await??;
+
+    Ok(Chrome {
+        nodes_total: counts.nodes_total,
+        silent: counts.silent,
+        open_alarms: counts.open_alarms,
+        open_orders: counts.open_orders,
+        user_name,
+        user_role,
+    })
 }
 
-///
+async fn counts(state: &AppState, access: &visibility::Access) -> Result<ChromeCounts, ApiError> {
+    let visible = access.visibility.node_filter();
+    let conn = state.pool.get().await?;
+
+    let cutoff = Utc::now()
+        .naive_utc()
+        .checked_sub_signed(chrono::TimeDelta::seconds(SILENCE_AFTER_SECONDS))
+        .unwrap_or_else(|| Utc::now().naive_utc());
+
+    let (nodes_total, silent, open_alarms, open_orders) = conn
+        .interact(move |conn| {
+            let mut total = nodes_schema::table.into_boxed();
+            let mut quiet = nodes_schema::table
+                .filter(nodes_schema::suspended.eq(false))
+                .filter(nodes_schema::last_seen_at.lt(cutoff))
+                .into_boxed();
+            let mut alarms = alarms_schema::table
+                .filter(alarms_schema::state.ne(AlarmState::Closed))
+                .into_boxed();
+            let mut orders = orders_schema::table
+                .inner_join(alarms_schema::table)
+                .filter(orders_schema::status.eq(WorkOrderStatus::Assigned))
+                .into_boxed();
+
+            if let Some(ref ids) = visible {
+                total = total.filter(nodes_schema::id.eq_any(ids.clone()));
+                quiet = quiet.filter(nodes_schema::id.eq_any(ids.clone()));
+                alarms = alarms.filter(alarms_schema::node_id.eq_any(ids.clone()));
+                orders = orders.filter(alarms_schema::node_id.eq_any(ids.clone()));
+            }
+
+            Ok::<_, diesel::result::Error>((
+                total.count().get_result::<i64>(conn)?,
+                quiet.count().get_result::<i64>(conn)?,
+                alarms.count().get_result::<i64>(conn)?,
+                orders.count().get_result::<i64>(conn)?,
+            ))
+        })
+        .await??;
+
+    Ok(ChromeCounts {
+        nodes_total,
+        silent,
+        open_alarms,
+        open_orders,
+    })
+}
+
+async fn chrome_counts(
+    auth: AuthPage,
+    State(state): State<AppState>,
+) -> Result<Html<String>, ApiError> {
+    let access = visibility::resolve(&state, auth.0.session.user_id).await?;
+    let html = counts(&state, &access)
+        .await?
+        .render()
+        .map_err(ApiError::internal)?;
+
+    Ok(Html(html))
+}
+
 async fn chrome(
     state: &AppState,
     user_id: i64,
@@ -290,27 +359,12 @@ async fn chrome(
         .await??;
 
     Ok(Chrome {
-        nodes_total: nodes.len(),
-        silent: nodes.iter().filter(|node| node.state == "silent").count(),
+        nodes_total: i64::try_from(nodes.len()).unwrap_or(i64::MAX),
+        silent: i64::try_from(nodes.iter().filter(|node| node.state == "silent").count())
+            .unwrap_or(i64::MAX),
         open_alarms: open_alarms.values().sum(),
         open_orders,
         user_name,
         user_role,
     })
-}
-
-const fn initial_state(
-    suspended: bool,
-    last_seen_at: Option<NaiveDateTime>,
-    now: NaiveDateTime,
-) -> &'static str {
-    if suspended {
-        return "suspended";
-    }
-
-    match last_seen_at {
-        None => "never seen",
-        Some(at) if now.signed_duration_since(at).num_seconds() > SILENCE_AFTER_SECONDS => "silent",
-        Some(_) => "reporting",
-    }
 }

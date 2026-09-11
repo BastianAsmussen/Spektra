@@ -10,7 +10,7 @@ use super::auth::{AuthUser, hash_password};
 use super::errors::{ApiError, ErrorBody};
 use super::visibility::{self, Access};
 use crate::db::models::node_credentials::NewNodeCredential;
-use crate::db::models::nodes::{Node, PlannedNode};
+use crate::db::models::nodes::{Node, NodeChanges, PlannedNode};
 use crate::db::schema::{
     node_credentials as credentials_schema, nodes as nodes_schema, roles as roles_schema,
     users as users_schema,
@@ -18,13 +18,13 @@ use crate::db::schema::{
 use crate::state::{AppState, NodeEvent};
 
 const MAX_NAME_CHARS: usize = 100;
-
 const MAX_EMAIL_CHARS: usize = 320;
-
 const MIN_PASSWORD_CHARS: usize = 12;
 
+/// Shortest reporting interval an operator may set, in seconds.
 pub const MIN_REPORT_INTERVAL: i32 = 5;
 
+/// Longest reporting interval an operator may set, in seconds.
 pub const MAX_REPORT_INTERVAL: i32 = 300;
 
 /// All routes under `/api/users`, plus the node suspension the fleet needs.
@@ -88,6 +88,7 @@ pub(crate) async fn require_admin(state: &AppState, user_id: i64) -> Result<Acce
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session, a non-administrator, or a database failure.
 #[utoipa::path(
     get,
     path = "/api/users",
@@ -142,6 +143,7 @@ async fn all_users(state: &AppState) -> Result<Vec<UserSummary>, ApiError> {
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the caller is not an administrator or a field is invalid.
 #[utoipa::path(
     post,
     path = "/api/users",
@@ -240,6 +242,7 @@ pub async fn create_user(
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the caller is not an administrator or the change would leave no admin.
 #[utoipa::path(
     post,
     path = "/api/users/{id}",
@@ -348,9 +351,9 @@ async fn one_user(state: &AppState, id: i64) -> Result<UserSummary, ApiError> {
 
 /// Take a node out of the fleet, or put it back.
 ///
-///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session, a non-administrator, or a missing node.
 #[utoipa::path(
     post,
     path = "/api/nodes/{id}/suspension",
@@ -419,6 +422,7 @@ pub struct NodeUpdate {
     pub longitude: Option<f64>,
     /// Administrators only, since owning a node grants the right to edit it.
     pub owner_id: Option<i64>,
+    /// Seconds between deliveries, within [`MIN_REPORT_INTERVAL`] and [`MAX_REPORT_INTERVAL`].
     pub report_interval_seconds: Option<i32>,
 }
 
@@ -451,6 +455,7 @@ fn check_position(latitude: Option<f64>, longitude: Option<f64>) -> Result<(), A
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the caller is not an administrator or the position is invalid.
 #[utoipa::path(
     post,
     path = "/api/nodes",
@@ -521,6 +526,7 @@ pub async fn plan_node(
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session, a non-administrator, or a missing node.
 #[utoipa::path(
     post,
     path = "/api/nodes/{id}/credential",
@@ -593,6 +599,7 @@ pub async fn rotate_credential(
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the caller cannot edit this node or a field is invalid.
 #[utoipa::path(
     post,
     path = "/api/nodes/{id}",
@@ -654,34 +661,16 @@ pub async fn update_node(
     let conn = state.pool.get().await?;
     let node: Node = conn
         .interact(move |conn| {
-            conn.transaction(|conn| {
-                if let Some(name) = name {
-                    diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
-                        .set(nodes_schema::name.eq(name))
-                        .execute(conn)?;
-                }
-                diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
-                    .set((
-                        nodes_schema::latitude.eq(latitude),
-                        nodes_schema::longitude.eq(longitude),
-                    ))
-                    .execute(conn)?;
-                if let Some(owner_id) = owner_id {
-                    diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
-                        .set(nodes_schema::owner_id.eq((owner_id != 0).then_some(owner_id)))
-                        .execute(conn)?;
-                }
-                if let Some(interval) = interval {
-                    diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
-                        .set(nodes_schema::report_interval_seconds.eq(interval))
-                        .execute(conn)?;
-                }
-
-                nodes_schema::table
-                    .filter(nodes_schema::id.eq(id))
-                    .select(Node::as_select())
-                    .first(conn)
-            })
+            diesel::update(nodes_schema::table.filter(nodes_schema::id.eq(id)))
+                .set(NodeChanges {
+                    name,
+                    latitude: Some(latitude),
+                    longitude: Some(longitude),
+                    owner_id: owner_id.map(|owner_id| (owner_id != 0).then_some(owner_id)),
+                    report_interval_seconds: interval,
+                })
+                .returning(Node::as_select())
+                .get_result(conn)
         })
         .await??;
 
@@ -701,15 +690,15 @@ pub mod fragments {
     use diesel::prelude::*;
 
     use super::{
-        MintedCredential, NewUserRequest, PlannedNodeRequest, SuspensionRequest, UserSummary,
-        UserUpdate, all_users, nodes_schema, require_admin,
+        MintedCredential, NewUserRequest, PlannedNodeRequest, SuspensionRequest, UserUpdate,
+        all_users, nodes_schema, require_admin,
     };
     use crate::api::auth::AuthPage;
     use crate::api::errors::ApiError;
     use crate::api::pages;
     use crate::state::AppState;
     use crate::templates::{
-        AdminNodeRow, AdminNodesFragment, AdminTemplate, AdminUserRow, AdminUsersFragment,
+        AdminNodeRow, AdminNodesFragment, AdminTemplate, AdminUsersFragment, Chrome,
         CredentialReveal,
     };
 
@@ -731,7 +720,6 @@ pub mod fragments {
             .route("/fragments/admin/nodes/{id}/credential", post(rotate))
     }
 
-    ///
     async fn plan(
         auth: AuthPage,
         State(state): State<AppState>,
@@ -798,15 +786,13 @@ pub mod fragments {
         let chrome = pages::chrome_for(&state, user_id).await?;
 
         let html = AdminTemplate {
-            users: rows(all_users(&state).await?),
+            users: all_users(&state).await?,
             nodes: node_rows(&state).await?,
             roles: ROLES.to_vec(),
-            nodes_total: chrome.nodes_total,
-            silent: chrome.silent,
-            open_alarms: chrome.open_alarms,
-            open_orders: chrome.open_orders,
-            user_name: chrome.user_name,
-            user_role: access.role,
+            chrome: Chrome {
+                user_role: access.role,
+                ..chrome
+            },
             current_user_id: user_id,
             list: true,
             live: false,
@@ -852,7 +838,7 @@ pub mod fragments {
             .0;
 
         let html = AdminUsersFragment {
-            users: rows(vec![updated]),
+            users: vec![updated],
             roles: ROLES.to_vec(),
             current_user_id: user_id,
             list: false,
@@ -922,7 +908,7 @@ pub mod fragments {
         current_user_id: i64,
     ) -> Result<Html<String>, ApiError> {
         let html = AdminUsersFragment {
-            users: rows(all_users(state).await?),
+            users: all_users(state).await?,
             roles: ROLES.to_vec(),
             current_user_id,
             list: true,
@@ -931,19 +917,6 @@ pub mod fragments {
         .map_err(ApiError::internal)?;
 
         Ok(Html(html))
-    }
-
-    fn rows(users: Vec<UserSummary>) -> Vec<AdminUserRow> {
-        users
-            .into_iter()
-            .map(|user| AdminUserRow {
-                id: user.id,
-                email: user.email,
-                full_name: user.full_name,
-                role: user.role,
-                deactivated: user.deactivated,
-            })
-            .collect()
     }
 
     async fn node_rows(state: &AppState) -> Result<Vec<AdminNodeRow>, ApiError> {

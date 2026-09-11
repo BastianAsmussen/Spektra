@@ -1,0 +1,2 @@
+{%- import "fragments/chrome_counts.html" as counters -%}
+{% call counters::counts(nodes_total, silent, open_alarms, open_orders, true) %}{% endcall %}
