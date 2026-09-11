@@ -6,6 +6,7 @@ use axum::{Router, response::Html, routing::get};
 use chrono::{NaiveDateTime, Utc};
 use diesel::dsl::count_star;
 use diesel::prelude::*;
+use serde::Deserialize;
 
 use super::auth::AuthPage;
 use super::errors::ApiError;
@@ -18,16 +19,97 @@ use crate::{
         users as users_schema, work_orders as orders_schema,
     },
     state::AppState,
-    templates::{Chrome, IndexTemplate, NodeTile, stamp_or_empty},
+    templates::{Chrome, FleetPage, IndexTemplate, NodeTile, stamp_or_empty},
 };
 
 ///
 const SILENCE_AFTER_SECONDS: i64 = 300;
 
+/// Tiles rendered per page of the fleet list.
+///
+pub const FLEET_PAGE: usize = 200;
+
+/// All page routes, plus the fleet list the dashboard pages through.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(index))
         .route("/nodes/{id}", get(node))
+        .route("/fragments/fleet", get(fleet_page))
+}
+
+/// What the fleet list is asked for.
+///
+#[derive(Debug, Default, Deserialize)]
+pub struct FleetQuery {
+    pub q: Option<String>,
+    pub state: Option<String>,
+    pub offset: Option<usize>,
+}
+
+impl FleetQuery {
+    fn at(&self, offset: usize) -> String {
+        let mut parts = vec![format!("offset={offset}")];
+        if let Some(term) = self.q.as_deref().filter(|term| !term.is_empty()) {
+            parts.push(format!("q={}", urlencode(term)));
+        }
+        if let Some(state) = self.state.as_deref().filter(|state| !state.is_empty()) {
+            parts.push(format!("state={}", urlencode(state)));
+        }
+
+        format!("?{}", parts.join("&"))
+    }
+
+    fn matches(&self, node: &NodeTile) -> bool {
+        let term = self.q.as_deref().unwrap_or_default().trim().to_lowercase();
+        let wanted = self.state.as_deref().unwrap_or_default();
+
+        (term.is_empty() || node.name.to_lowercase().contains(&term))
+            && (wanted.is_empty() || node.state == wanted)
+    }
+}
+
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                char::from(byte).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+async fn fleet_page(
+    auth: AuthPage,
+    State(state): State<AppState>,
+    Query(query): Query<FleetQuery>,
+) -> Result<Html<String>, ApiError> {
+    let access = visibility::resolve(&state, auth.0.session.user_id).await?;
+    let (nodes, _) = fleet(&state, access.visibility.node_filter()).await?;
+
+    let matching: Vec<NodeTile> = nodes
+        .into_iter()
+        .filter(|node| query.matches(node))
+        .collect();
+
+    let offset = query.offset.unwrap_or_default().min(matching.len());
+    let end = offset.saturating_add(FLEET_PAGE).min(matching.len());
+    let next = if end < matching.len() {
+        query.at(end)
+    } else {
+        String::new()
+    };
+
+    let html = FleetPage {
+        nodes: matching.into_iter().skip(offset).take(FLEET_PAGE).collect(),
+        next,
+        first: offset == 0,
+    }
+    .render()
+    .map_err(ApiError::internal)?;
+
+    Ok(Html(html))
 }
 
 async fn index(auth: AuthPage, State(state): State<AppState>) -> Result<Html<String>, ApiError> {
@@ -72,7 +154,16 @@ async fn dashboard(
     let (nodes, open) = fleet(&state, visible).await?;
     let chrome = chrome(&state, user_id, &nodes, &open).await?;
 
+    let shown = nodes.len().min(FLEET_PAGE);
+    let next = if nodes.len() > shown {
+        format!("?offset={shown}")
+    } else {
+        String::new()
+    };
+
     let html = IndexTemplate {
+        shown,
+        next,
         nodes_total: chrome.nodes_total,
         silent: chrome.silent,
         open_alarms: chrome.open_alarms,

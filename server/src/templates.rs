@@ -47,9 +47,19 @@ pub struct NodeTile {
 }
 
 #[derive(Template)]
+#[template(path = "fragments/fleet.html")]
+pub struct FleetPage {
+    pub nodes: Vec<NodeTile>,
+    pub next: String,
+    pub first: bool,
+}
+
+#[derive(Template)]
 #[template(path = "index.html")]
 pub struct IndexTemplate {
     pub nodes: Vec<NodeTile>,
+    pub shown: usize,
+    pub next: String,
     pub panel: String,
     pub nodes_total: usize,
     pub silent: usize,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use askama::Template;
@@ -18,6 +19,7 @@ use crate::state::{AlarmEvent, AppState, NodeEvent};
 use crate::templates::{AlarmStub, LiveReading, LiveReadings, NodeStatusFragment};
 
 const REVALIDATE: Duration = Duration::from_mins(1);
+const FLUSH: Duration = Duration::from_secs(1);
 
 /// Close reason the browser matches on to send the reader to the login form.
 pub const SESSION_ENDED: &str = "session-expired";
@@ -47,6 +49,10 @@ async fn run(socket: WebSocket, state: AppState, visibility: Visibility, token: 
     let mut revalidate = tokio::time::interval(REVALIDATE);
     revalidate.tick().await;
 
+    let mut pending: HashMap<i64, NodeEvent> = HashMap::new();
+    let mut flush = tokio::time::interval(FLUSH);
+    flush.tick().await;
+
     loop {
         tokio::select! {
             incoming = receiver.next() => match incoming {
@@ -56,10 +62,8 @@ async fn run(socket: WebSocket, state: AppState, visibility: Visibility, token: 
 
             event = node_events.recv() => match event {
                 Ok(event) => {
-                    if visibility.allows(event.node_id())
-                        && send(&mut sender, node_fragment(&event)).await.is_err()
-                    {
-                        break;
+                    if visibility.allows(event.node_id()) {
+                        pending.insert(event.node_id(), event);
                     }
                 }
                 Err(RecvError::Lagged(skipped)) => {
@@ -67,6 +71,13 @@ async fn run(socket: WebSocket, state: AppState, visibility: Visibility, token: 
                 }
                 Err(RecvError::Closed) => break,
             },
+
+            _ = flush.tick(), if !pending.is_empty() => {
+                let batch = node_batch(pending.drain().map(|(_, event)| event));
+                if send(&mut sender, batch).await.is_err() {
+                    break;
+                }
+            }
 
             event = alarm_events.recv() => match event {
                 Ok(event) => {
@@ -122,6 +133,15 @@ async fn send(
             Ok(())
         }
     }
+}
+
+fn node_batch(events: impl Iterator<Item = NodeEvent>) -> Result<String, askama::Error> {
+    let mut batch = String::new();
+    for event in events {
+        batch.push_str(&node_fragment(&event)?);
+    }
+
+    Ok(batch)
 }
 
 fn node_fragment(event: &NodeEvent) -> Result<String, askama::Error> {

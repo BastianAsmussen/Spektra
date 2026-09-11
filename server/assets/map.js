@@ -2,8 +2,8 @@
   "use strict";
 
   const DENMARK = [56.15, 10.2];
-  const DEFAULT_ZOOM = 7;
 
+  const DEFAULT_ZOOM = 7;
   const FOCUS_ZOOM = 9;
 
   const STATES = ["reporting", "silent", "suspended", "never-seen"];
@@ -15,12 +15,15 @@
     return;
   }
 
-  let fleet;
-  try {
-    fleet = JSON.parse(payload.textContent);
-  } catch (error) {
-    console.error("fleet data is not valid JSON", error);
-    return;
+  let fleet = window.spektraFleet;
+  if (!Array.isArray(fleet)) {
+    try {
+      fleet = JSON.parse(payload.textContent);
+    } catch (error) {
+      console.error("fleet data is not valid JSON", error);
+
+      return;
+    }
   }
 
   const placed = fleet.filter(
@@ -150,8 +153,8 @@
     selected?.getElement()?.classList.remove("marker--selected");
     selected = marker ?? null;
     selectedId = marker ? nodeId : null;
-    marker?.getElement()?.classList.add("marker--selected");
 
+    marker?.getElement()?.classList.add("marker--selected");
     if (marker && pan) {
       map.setView(marker.getLatLng(), Math.max(map.getZoom(), FOCUS_ZOOM));
     }
@@ -310,6 +313,9 @@
     }
   });
 
+  const repaint = new Map();
+  let pendingPaint = 0;
+
   document.body.addEventListener("htmx:oobAfterSwap", (event) => {
     const target = event.detail.target;
     const match = /^node-(\d+)-state$/.exec(target.id ?? "");
@@ -317,9 +323,21 @@
       return;
     }
 
-    const marker = markers.get(Number(match[1]));
-    if (marker) {
-      paint(marker, target.dataset.state ?? "never seen");
+    repaint.set(Number(match[1]), target.dataset.state ?? "never seen");
+    if (pendingPaint) {
+      return;
     }
+
+    pendingPaint = requestAnimationFrame(() => {
+      pendingPaint = 0;
+      for (const [nodeId, state] of repaint) {
+        const marker = markers.get(nodeId);
+        if (marker) {
+          paint(marker, state);
+        }
+      }
+
+      repaint.clear();
+    });
   });
 })();

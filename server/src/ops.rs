@@ -7,17 +7,17 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Serialize;
 use utoipa::ToSchema;
 
+/// Fifteen minutes without an accepted report.
 const INGEST_STALL: Duration = Duration::from_mins(15);
 
+/// Three minutes without a finished detection pass.
 const DETECTOR_STALL: Duration = Duration::from_mins(3);
 
 const REJECTION_RATE: f64 = 0.33;
-
 const MIN_CALLS_FOR_RATE: u64 = 20;
+const RATE_SAMPLES: usize = 10;
 
 const HISTORY: usize = 300;
-
-const RATE_SAMPLES: usize = 10;
 
 #[derive(Debug, Clone, Copy)]
 struct Sample {
@@ -39,8 +39,11 @@ pub struct Metrics {
     pub registrations: AtomicU64,
     pub ingest_rejected: AtomicU64,
     pub ingest_failed: AtomicU64,
+    /// Unix timestamp. Zero is never.
     pub last_ingest_at: AtomicI64,
+    /// Unix timestamp. Zero is never.
     pub last_detection_at: AtomicI64,
+    /// Unix timestamp. Zero is never.
     pub last_maintenance_at: AtomicI64,
     pub alarms_raised: AtomicU64,
     pub http_requests: AtomicU64,
@@ -185,7 +188,7 @@ impl Metrics {
         let mut at = Vec::with_capacity(history.len());
         let mut value = Vec::with_capacity(history.len());
 
-        for (older, newer) in history.iter().zip(history.iter().skip(1)) {
+        for (older, newer) in history.iter().zip(history.iter().skip(RATE_SAMPLES)) {
             let seconds = u64::try_from(newer.at.saturating_sub(older.at)).unwrap_or(0);
 
             at.push(newer.at);
@@ -224,6 +227,7 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// What is wrong, if anything. Empty means healthy.
     #[must_use]
     pub fn problems(&self, now: NaiveDateTime, fleet_size: u64) -> Vec<String> {
         let mut problems = Vec::new();
