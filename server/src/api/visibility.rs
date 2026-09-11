@@ -56,17 +56,28 @@ pub struct Access {
 }
 
 impl Access {
-    ///
+    /// Whether this user may move an alarm along its lifecycle or dispatch a work order.
     #[must_use]
     pub fn may_act(&self) -> bool {
         self.role != READER
     }
 
     /// Whether this user may dispatch work orders.
-    ///
     #[must_use]
     pub fn may_dispatch(&self) -> bool {
         self.role == OPERATOR || self.role == ADMINISTRATOR
+    }
+
+    /// Whether this user may file the field report on one work order.
+    #[must_use]
+    pub fn may_complete(&self, assignee: i64) -> bool {
+        self.may_act() && (assignee == self.user_id || self.is_admin())
+    }
+
+    /// Whether a work order listing should be narrowed to this user's own.
+    #[must_use]
+    pub fn sees_only_own_orders(&self) -> bool {
+        self.role == TECHNICIAN
     }
 
     /// Whether this user administers users and nodes.
@@ -80,6 +91,7 @@ impl Access {
 ///
 /// # Errors
 ///
+/// Returns [`ApiError::NotFound`] when there is no such node.
 pub async fn may_edit_node(
     state: &AppState,
     access: &Access,
@@ -107,6 +119,7 @@ pub async fn may_edit_node(
 ///
 /// # Errors
 ///
+/// Returns [`ApiError::Unauthorized`] when the session points at a missing user.
 pub async fn resolve(state: &AppState, user_id: i64) -> Result<Access, ApiError> {
     let conn = state.pool.get().await?;
     conn.interact(move |conn| {
@@ -206,6 +219,21 @@ mod tests {
         assert!(access(ADMINISTRATOR).may_dispatch());
         assert!(!access(TECHNICIAN).may_dispatch());
         assert!(!access(READER).may_dispatch());
+    }
+
+    #[test]
+    fn only_the_assignee_or_an_administrator_may_complete() {
+        let access = |role: &str| Access {
+            user_id: 1,
+            role: role.to_owned(),
+            visibility: Visibility::Fleet,
+        };
+
+        assert!(access(TECHNICIAN).may_complete(1));
+        assert!(!access(TECHNICIAN).may_complete(2));
+        assert!(access(ADMINISTRATOR).may_complete(2));
+        assert!(!access(OPERATOR).may_complete(2));
+        assert!(!access(READER).may_complete(1));
     }
 
     #[test]

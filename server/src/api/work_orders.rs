@@ -41,7 +41,6 @@ pub struct DispatchRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct FieldReport {
     /// Whether the fault was still there when they arrived.
-    ///
     pub fault_present: bool,
     /// What caused it, in the technician's words.
     pub cause: Option<String>,
@@ -59,9 +58,9 @@ pub struct CompletionResult {
 
 /// List work orders this user may see.
 ///
-///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session or a database failure.
 #[utoipa::path(
     get,
     path = "/api/work-orders",
@@ -87,7 +86,7 @@ pub async fn list_work_orders(
                 .order(orders_schema::created_at.desc())
                 .into_boxed();
 
-            if access.visibility.node_filter().is_some() {
+            if access.sees_only_own_orders() {
                 query = query.filter(orders_schema::technician_user_id.eq(user_id));
             }
 
@@ -100,9 +99,9 @@ pub async fn list_work_orders(
 
 /// Dispatch an alarm to a technician.
 ///
-///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the caller cannot dispatch, the alarm is missing, or the station name is invalid.
 #[utoipa::path(
     post,
     path = "/api/alarms/{id}/dispatch",
@@ -215,9 +214,9 @@ pub async fn dispatch(
 
 /// File a field report and close the alarm behind it.
 ///
-///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the caller cannot complete this order or it is already completed.
 #[utoipa::path(
     post,
     path = "/api/work-orders/{id}/complete",
@@ -258,7 +257,7 @@ pub async fn complete(
         })
         .await??;
 
-    if access.visibility.node_filter().is_some() && assignee != user_id {
+    if !access.may_complete(assignee) {
         return Err(ApiError::Forbidden(
             "This work order is assigned to another technician.".into(),
         ));
@@ -410,7 +409,7 @@ mod tests {
     }
 }
 
-///
+/// Dashboard fragments for dispatch and field reporting.
 pub mod fragments {
     use askama::Template;
     use axum::Form;
@@ -452,7 +451,6 @@ pub mod fragments {
         Ok(Html(html))
     }
 
-    ///
     async fn form(
         auth: AuthPage,
         State(state): State<AppState>,
@@ -502,10 +500,8 @@ pub mod fragments {
         Ok(Html(html))
     }
 
-    ///
     const ORDERS_CHANGED: &str = "spektra:orders";
 
-    ///
     async fn send(
         auth: AuthPage,
         State(state): State<AppState>,
@@ -568,7 +564,7 @@ pub mod fragments {
     ) -> Result<Vec<WorkOrderRow>, ApiError> {
         let access = visibility::resolve(state, user_id).await?;
         let conn = state.pool.get().await?;
-        let scoped = access.visibility.node_filter().is_some();
+        let scoped = access.sees_only_own_orders();
 
         let rows: Vec<OrderRow> = conn
             .interact(move |conn| {
@@ -600,9 +596,7 @@ pub mod fragments {
 
         Ok(rows
             .into_iter()
-            .map(|(order, node_name, technician)| {
-                row(order, node_name, technician, user_id, &access)
-            })
+            .map(|(order, node_name, technician)| row(order, node_name, technician, &access))
             .collect())
     }
 
@@ -610,7 +604,6 @@ pub mod fragments {
         order: WorkOrder,
         node_name: String,
         technician: String,
-        user_id: i64,
         access: &Access,
     ) -> WorkOrderRow {
         WorkOrderRow {
@@ -626,8 +619,7 @@ pub mod fragments {
             cause: order.cause.unwrap_or_default(),
             action_taken: order.action_taken.unwrap_or_default(),
             may_complete: order.status != WorkOrderStatus::Completed
-                && access.may_act()
-                && order.technician_user_id == user_id,
+                && access.may_complete(order.technician_user_id),
         }
     }
 }
