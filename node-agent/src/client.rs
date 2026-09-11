@@ -8,6 +8,7 @@ use protocol::v1::{
     LiveCommand, LiveSample, LiveWatchRequest, Location, MeasurementReport, Modulation,
     NodeRegistrationRequest,
 };
+use tonic::codec::CompressionEncoding;
 use tonic::metadata::{MetadataMap, MetadataValue};
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic::{Request, Status};
@@ -28,7 +29,7 @@ pub enum ClientError {
     Identity(IdentityError),
     /// The credential holds bytes that cannot go in a metadata value.
     Credential,
-    ///
+    /// The server already knows this identity, but this node no longer holds the credential.
     LostCredential { identity: String },
     /// No enrollment token was configured, so there is nothing to register with.
     MissingEnrollmentToken,
@@ -100,7 +101,9 @@ impl Client {
             .connect_lazy();
 
         Ok(Self {
-            inner: NodeIngestClient::new(channel),
+            inner: NodeIngestClient::new(channel)
+                .send_compressed(CompressionEncoding::Zstd)
+                .accept_compressed(CompressionEncoding::Zstd),
             credential: None,
             clock_offset_seconds: 0.0,
             delivery_delay: None,
@@ -120,7 +123,6 @@ impl Client {
     }
 
     /// A second client over the same connection, holding the same credential.
-    ///
     #[must_use]
     pub fn duplicate(&self) -> Self {
         Self {
@@ -135,6 +137,7 @@ impl Client {
     ///
     /// # Errors
     ///
+    /// [`ClientError::Rpc`] if the server refuses or is unreachable.
     pub async fn watch_live(&mut self) -> Result<tonic::Streaming<LiveCommand>, ClientError> {
         let request = self.authenticated(LiveWatchRequest {
             protocol_version: PROTOCOL_VERSION.to_owned(),
@@ -158,6 +161,7 @@ impl Client {
     ///
     /// # Errors
     ///
+    /// [`ClientError::Identity`] on state-directory failure, [`ClientError::LostCredential`] if the server already knows the identity, [`ClientError::Rpc`] otherwise.
     pub async fn register_or_load(&mut self, config: &Config) -> Result<Identity, ClientError> {
         let path = config.identity_path();
 
@@ -235,6 +239,7 @@ impl Client {
     ///
     /// # Errors
     ///
+    /// [`ClientError::Rpc`] if the server refuses it.
     pub async fn submit(&mut self, report: MeasurementReport) -> Result<IngestAck, ClientError> {
         let request = self.authenticated(report)?;
         let ack = self.inner.submit_measurements(request).await?.into_inner();
@@ -300,7 +305,6 @@ impl Client {
         Ok(request)
     }
 
-    ///
     fn observe_server_time(&mut self, server_time: Option<&prost_types::Timestamp>) {
         let Some(stamp) = server_time else {
             return;

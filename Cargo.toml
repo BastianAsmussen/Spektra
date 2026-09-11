@@ -49,7 +49,7 @@ soapysdr = "0.5.1"
 spektra-fft = { version = "0.2.0", features = ["num-complex"] }
 strum = { version = "0.28", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
-tonic = "0.14"
+tonic = { version = "0.14", features = ["zstd", "gzip"] }
 tonic-build = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
@@ -66,7 +66,7 @@ codegen-units = 1
 strip = "symbols"
 
 [workspace.lints.clippy]
-pedantic = { level = "deny", priority = -1 } # "UMM, AKSHUALLY"
+pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 
 unwrap_used = "deny"

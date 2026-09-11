@@ -17,6 +17,7 @@ use protocol::v1::{
 };
 use rand::RngExt;
 use serde_json::json;
+use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 
@@ -30,7 +31,6 @@ const DEFAULT_CYCLE_MS: i64 = 60_000;
 /// Knuth's multiplier, coprime with [`DEFAULT_CYCLE_MS`].
 const SLOT_SPREAD: i64 = 2_654_435_761;
 
-///
 fn report_schedule(node_id: i64, now: DateTime<Utc>, cycle_ms: i64) -> Option<ReportSchedule> {
     let cycle_ms = if cycle_ms > 0 {
         cycle_ms
@@ -57,7 +57,6 @@ struct NodeAuth {
 }
 
 /// The v1 ingest service.
-///
 #[derive(Clone)]
 pub struct Ingest {
     pub state: AppState,
@@ -74,10 +73,11 @@ impl Ingest {
     #[must_use]
     pub fn server(self) -> NodeIngestServer<Self> {
         NodeIngestServer::new(self)
+            .accept_compressed(CompressionEncoding::Zstd)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Zstd)
     }
 
-    ///
-    ///
     async fn authenticate(&self, metadata: &MetadataMap) -> Result<NodeAuth, Status> {
         let token = bearer_token(metadata)?;
         let now = Utc::now().naive_utc();
@@ -120,7 +120,6 @@ impl Ingest {
         })
     }
 
-    ///
     async fn authenticate_registration(
         &self,
         metadata: &MetadataMap,
@@ -179,7 +178,6 @@ fn internal<E: std::error::Error>(err: E) -> Status {
 }
 
 /// Generate a 32-byte random bearer credential, hex encoded.
-///
 #[must_use]
 pub fn generate_token() -> String {
     let mut bytes = [0_u8; 32];
@@ -188,7 +186,6 @@ pub fn generate_token() -> String {
     hex::encode(bytes)
 }
 
-///
 fn count<T>(
     metrics: &crate::ops::Metrics,
     outcome: &Result<Response<T>, Status>,
@@ -255,7 +252,6 @@ impl NodeIngest for Ingest {
     type WatchLiveStream = Pin<Box<dyn Stream<Item = Result<LiveCommand, Status>> + Send>>;
 
     /// Hold a stream open so the server can start a session on this node.
-    ///
     async fn watch_live(
         &self,
         request: Request<LiveWatchRequest>,
@@ -281,7 +277,6 @@ impl NodeIngest for Ingest {
     }
 
     /// Take one dwell from an inspected node and push it at open dashboards.
-    ///
     async fn submit_live(&self, request: Request<LiveSample>) -> Result<Response<LiveAck>, Status> {
         let node_id = self.authenticate(request.metadata()).await?.node_id;
         validate::live(request.get_ref())?;
@@ -325,7 +320,6 @@ fn live_ack(session_id: u64) -> LiveAck {
 }
 
 impl Ingest {
-    ///
     async fn register_node_inner(
         &self,
         request: Request<NodeRegistrationRequest>,
