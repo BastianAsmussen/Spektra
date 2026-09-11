@@ -21,3 +21,5 @@ CREATE TABLE rollups(
 );
 
 CREATE INDEX idx_rollups_lookup ON rollups(node_id, channel_id, metric, resolution, bucket_start);
+
+CREATE INDEX idx_rollups_bucket ON rollups(resolution, bucket_start);

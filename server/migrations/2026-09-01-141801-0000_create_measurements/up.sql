@@ -24,3 +24,5 @@ CREATE TABLE measurements(
 CREATE TABLE measurements_default PARTITION OF measurements DEFAULT;
 
 CREATE UNIQUE INDEX idx_measurements_lookup ON measurements(node_id, channel_id, metric, window_start);
+
+CREATE INDEX idx_measurements_recent ON measurements(window_start);
