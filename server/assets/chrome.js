@@ -59,14 +59,22 @@
   const stateFilter = document.getElementById("fleet-state");
   const fleet = document.getElementById("fleet");
 
+  let roster = [];
+  try {
+    roster = JSON.parse(document.getElementById("fleet-data")?.textContent ?? "[]");
+  } catch (error) {
+    console.error("fleet data is not valid JSON", error);
+  }
+
+  window.spektraFleet = roster;
+
+  const states = new Map(roster.map((node) => [node.id, node.state]));
+  let silent = roster.reduce((total, node) => total + (node.state === "silent" ? 1 : 0), 0);
+
   const wanted = new URLSearchParams(location.search).get("state");
   if (stateFilter && wanted &&
       [...stateFilter.options].some((option) => option.value === wanted)) {
     stateFilter.value = wanted;
-  }
-
-  function tileState(tile) {
-    return tile.querySelector("[data-state]")?.dataset.state ?? "";
   }
 
   function applyFilter() {
@@ -78,15 +86,13 @@
     const wanted = stateFilter?.value ?? "";
     const visible = [];
 
-    for (const tile of fleet.querySelectorAll("[data-node]")) {
-      const name = tile.querySelector("h3")?.textContent?.toLowerCase() ?? "";
+    for (const node of roster) {
       const matches =
-        (term === "" || name.includes(term)) &&
-        (wanted === "" || tileState(tile) === wanted);
+        (term === "" || node.name.toLowerCase().includes(term)) &&
+        (wanted === "" || states.get(node.id) === wanted);
 
-      tile.hidden = !matches;
       if (matches) {
-        visible.push(Number(tile.dataset.node));
+        visible.push(node.id);
       }
     }
 
@@ -101,22 +107,27 @@
     window.dispatchEvent(new CustomEvent("spektra:refit"));
   });
 
-  function recount() {
+  let pendingPaint = 0;
+  function paintNodeCounts() {
+    if (!fleet || pendingPaint) {
+      return;
+    }
+
+    pendingPaint = requestAnimationFrame(() => {
+      pendingPaint = 0;
+      set("count-nodes", roster.length, false);
+      set("count-silent", silent, true, "text-yellow");
+    });
+  }
+
+  function recountFeeds() {
     if (!fleet) {
       return;
     }
 
-    const tiles = [...document.querySelectorAll("#fleet [data-node]")];
     const alarms = [...document.querySelectorAll("#alarm-feed [id^='alarm-']")];
     const orders = [...document.querySelectorAll("#work-orders [data-status]")];
 
-    set("count-nodes", tiles.length, false);
-    set(
-      "count-silent",
-      tiles.filter((tile) => tileState(tile) === "silent").length,
-      true,
-      "text-yellow",
-    );
     set(
       "count-alarms",
       alarms.filter((alarm) => alarm.dataset.state && alarm.dataset.state !== "closed").length,
@@ -131,6 +142,31 @@
     );
   }
 
+  function observeState(element) {
+    const match = /^node-(\d+)-state$/.exec(element.id ?? "");
+    if (!match) {
+      return false;
+    }
+
+    const id = Number(match[1]);
+    const before = states.get(id);
+    const after = element.dataset.state ?? "never seen";
+    if (before === after) {
+      return true;
+    }
+
+    states.set(id, after);
+    if (before === "silent") {
+      silent -= 1;
+    }
+    if (after === "silent") {
+      silent += 1;
+    }
+    paintNodeCounts();
+
+    return true;
+  }
+
   function set(id, value, colorWhenNonZero, color) {
     const element = document.getElementById(id);
     if (!element) {
@@ -143,11 +179,16 @@
     }
   }
 
-  document.body.addEventListener("htmx:afterSwap", recount);
-  document.body.addEventListener("htmx:oobAfterSwap", recount);
+  document.body.addEventListener("htmx:oobAfterSwap", (event) => {
+    if (!observeState(event.detail.target)) {
+      recountFeeds();
+    }
+  });
+  document.body.addEventListener("htmx:afterSwap", recountFeeds);
   document.addEventListener("DOMContentLoaded", () => {
     applyFilter();
-    recount();
+    paintNodeCounts();
+    recountFeeds();
   });
 
   const clockParts = new Intl.DateTimeFormat("da-DK", {

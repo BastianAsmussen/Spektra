@@ -1,0 +1,13 @@
+{%- import "fragments/node_tile.html" as tiles -%}
+
+{% for node in nodes %}
+  {% call tiles::tile(node.id, node.name, node.state, node.at) %}{% endcall %}
+{% else %}
+  {%- if first %}
+    <p class="text-sm text-overlay0">Ingen noder passer til søgningen.</p>
+  {% endif -%}
+{% endfor %}
+
+{%- if !next.is_empty() %}
+  {% call tiles::next_page(next) %}{% endcall %}
+{% endif -%}

@@ -37,12 +37,17 @@
       <div class="ml-auto flex flex-wrap items-center gap-2">
         <div class="relative">
           {% call icon::search("pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-overlay0") %}{% endcall %}
-          <input type="search" id="fleet-search" placeholder="Søg node"
+          <input type="search" id="fleet-search" name="q" placeholder="Søg node"
             aria-label="Søg efter node"
+            hx-get="/fragments/fleet" hx-target="#fleet" hx-swap="innerHTML"
+            hx-trigger="input changed delay:250ms, search"
+            hx-include="#fleet-state"
             class="h-7 w-28 rounded border border-surface0 bg-canvas pl-7 pr-2 text-xs text-text
               placeholder:text-overlay0 focus:border-blue focus:outline-none sm:w-36">
         </div>
-        <select id="fleet-state" aria-label="Filtrér på tilstand"
+        <select id="fleet-state" name="state" aria-label="Filtrér på tilstand"
+          hx-get="/fragments/fleet" hx-target="#fleet" hx-swap="innerHTML"
+          hx-include="#fleet-search"
           class="h-7 rounded border border-surface0 bg-canvas px-2 text-xs text-text
             focus:border-blue focus:outline-none">
           <option value="">Alle</option>
@@ -72,14 +77,18 @@
 
     <p id="unplaced" class="mt-2 text-xs text-overlay0"></p>
 
-    {#- Columns come from `#fleet` in the stylesheet, which fits as many as the
-        width allows instead of picking a number at a breakpoint. -#}
     <div id="fleet" class="mt-4 grid gap-3">
       {% for node in nodes %}
-        {% call tiles::tile(node.id, node.name, node.state, node.at) %}{% endcall %}
+        {%- if loop.index0 < shown %}
+          {% call tiles::tile(node.id, node.name, node.state, node.at) %}{% endcall %}
+        {% endif -%}
       {% else %}
         <p class="text-sm text-overlay0">Ingen noder er registreret endnu.</p>
       {% endfor %}
+
+      {%- if !next.is_empty() %}
+        {% call tiles::next_page(next) %}{% endcall %}
+      {% endif -%}
     </div>
   </section>
 
