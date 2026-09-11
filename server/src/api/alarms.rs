@@ -53,7 +53,6 @@ pub struct TransitionRequest {
 }
 
 /// Whether a move along the lifecycle is allowed.
-///
 #[must_use]
 pub const fn may_transition(from: AlarmState, to: AlarmState) -> bool {
     matches!(
@@ -71,6 +70,7 @@ pub const fn may_transition(from: AlarmState, to: AlarmState) -> bool {
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session or a database failure.
 #[utoipa::path(
     get,
     path = "/api/alarms",
@@ -119,6 +119,7 @@ pub async fn list_alarms(
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session, a forbidden node, or a missing alarm.
 #[utoipa::path(
     get,
     path = "/api/alarms/{id}",
@@ -166,10 +167,23 @@ pub async fn get_alarm(
     Ok(Json(detail))
 }
 
+enum TransitionError {
+    Forbidden,
+    Illegal,
+    Db(diesel::result::Error),
+}
+
+impl From<diesel::result::Error> for TransitionError {
+    fn from(err: diesel::result::Error) -> Self {
+        Self::Db(err)
+    }
+}
+
 /// Move an alarm along its lifecycle.
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] if the move is forbidden, missing, or not allowed by the lifecycle.
 #[utoipa::path(
     post,
     path = "/api/alarms/{id}/transition",
@@ -208,6 +222,7 @@ pub async fn transition_alarm(
     let user_id = auth.session.user_id;
     let to = request.to;
     let reason = request.reason;
+    let visibility = access.visibility.clone();
 
     let (node_id, from, detail) = conn
         .interact(move |conn| {
@@ -218,8 +233,11 @@ pub async fn transition_alarm(
                     .for_update()
                     .first(conn)?;
 
+                if !visibility.allows(node_id) {
+                    return Err(TransitionError::Forbidden);
+                }
                 if !may_transition(from, to) {
-                    return Err(diesel::result::Error::RollbackTransaction);
+                    return Err(TransitionError::Illegal);
                 }
 
                 let closed_at = (to == AlarmState::Closed).then(|| Utc::now().naive_utc());
@@ -256,17 +274,14 @@ pub async fn transition_alarm(
         })
         .await?
         .map_err(|err| match err {
-            diesel::result::Error::RollbackTransaction => ApiError::UnprocessableEntity(format!(
+            TransitionError::Forbidden => {
+                ApiError::Forbidden("This alarm is on a node you are not dispatched to.".into())
+            }
+            TransitionError::Illegal => ApiError::UnprocessableEntity(format!(
                 "An alarm cannot move to '{to}' from where it is."
             )),
-            other => ApiError::from(other),
+            TransitionError::Db(other) => ApiError::from(other),
         })?;
-
-    if !access.visibility.allows(node_id) {
-        return Err(ApiError::Forbidden(
-            "This alarm is on a node you are not dispatched to.".into(),
-        ));
-    }
 
     state.publish_alarm(AlarmEvent::StateChanged {
         alarm_id: id,
@@ -279,7 +294,6 @@ pub async fn transition_alarm(
 }
 
 /// The states an alarm may move to from where it is.
-///
 #[must_use]
 pub fn next_states(from: AlarmState) -> Vec<AlarmState> {
     [
@@ -374,7 +388,7 @@ mod tests {
     }
 }
 
-///
+/// Dashboard fragments for the alarm lifecycle.
 pub mod fragments {
     use askama::Template;
     use axum::Form;
@@ -395,7 +409,6 @@ pub mod fragments {
     use crate::templates::{AlarmEntry, AlarmList, AlarmRow, Transition};
 
     /// Most alarms the feed draws on load.
-    ///
     const FEED_LIMIT: i64 = 50;
 
     /// All fragment routes for alarms.
@@ -446,7 +459,6 @@ pub mod fragments {
         render(&state, auth.0.session.user_id, id).await
     }
 
-    ///
     async fn transition(
         auth: AuthPage,
         State(state): State<AppState>,
@@ -520,7 +532,6 @@ pub mod fragments {
         }
     }
 
-    ///
     fn summary(explanation: &serde_json::Value) -> String {
         let number = |pointer: &str| {
             explanation

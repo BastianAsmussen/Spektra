@@ -16,7 +16,9 @@ use serde_json::{Value, json};
 use server::api::{alarms, nodes, work_orders};
 use server::db::models::enums::{AlarmState, Metric};
 use server::db::models::nodes::NewNode;
-use server::db::schema::{alarms as alarms_schema, nodes as nodes_schema};
+use server::db::schema::{
+    alarm_events as events_schema, alarms as alarms_schema, nodes as nodes_schema,
+};
 use server::state::AppState;
 use tower::ServiceExt as _;
 
@@ -553,6 +555,116 @@ async fn a_technician_may_not_report_on_someone_elses_order() {
     .await;
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_technician_may_not_transition_an_alarm_they_were_not_sent_to() {
+    let pool = test_pool("lifecycle", "foreign_transition").await;
+    let state = AppState::new(pool.clone());
+    let (technician_id, technician) = seed_actor(&pool, "tech@example.org", TECHNICIAN).await;
+    let (_, alarm_id) = seed_alarm(&pool).await;
+
+    let response = post(
+        &state,
+        &technician,
+        &format!("/api/alarms/{alarm_id}/transition"),
+        json!({"to": "under_verification", "reason": "not on this node"}),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let conn = pool.get().await.expect("assert connection");
+    let (state_now, events, by_technician) = conn
+        .interact(move |conn| {
+            let state_now: AlarmState = alarms_schema::table
+                .filter(alarms_schema::id.eq(alarm_id))
+                .select(alarms_schema::state)
+                .first(conn)?;
+
+            let events = events_schema::table
+                .filter(events_schema::alarm_id.eq(alarm_id))
+                .select(diesel::dsl::count_star())
+                .get_result::<i64>(conn)?;
+
+            let by_technician = events_schema::table
+                .filter(events_schema::alarm_id.eq(alarm_id))
+                .filter(events_schema::changed_by_user_id.eq(technician_id))
+                .select(diesel::dsl::count_star())
+                .get_result::<i64>(conn)?;
+
+            Ok::<_, diesel::result::Error>((state_now, events, by_technician))
+        })
+        .await
+        .expect("assert interact failed")
+        .expect("assert query failed");
+
+    assert_eq!(state_now, AlarmState::Open);
+    assert_eq!(events, 0);
+    assert_eq!(by_technician, 0);
+}
+
+#[tokio::test]
+async fn an_operator_may_not_complete_another_technicians_order() {
+    let pool = test_pool("lifecycle", "operator_foreign_order").await;
+    let state = AppState::new(pool.clone());
+    let (_, operator) = seed_actor(&pool, "operator@example.org", OPERATOR).await;
+    let (technician_id, _) = seed_actor(&pool, "tech@example.org", TECHNICIAN).await;
+    let (_, alarm_id) = seed_alarm(&pool).await;
+
+    let order = body_json(
+        post(
+            &state,
+            &operator,
+            &format!("/api/alarms/{alarm_id}/dispatch"),
+            json!({"technician_user_id": technician_id, "station_name": "Hadsund"}),
+        )
+        .await,
+    )
+    .await;
+    let order_id = order["id"].as_i64().expect("an order id");
+
+    let response = post(
+        &state,
+        &operator,
+        &format!("/api/work-orders/{order_id}/complete"),
+        json!({"fault_present": true, "cause": null, "action_taken": null}),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn an_administrator_may_complete_any_order() {
+    let pool = test_pool("lifecycle", "administrator_order").await;
+    let state = AppState::new(pool.clone());
+    let (_, operator) = seed_actor(&pool, "operator@example.org", OPERATOR).await;
+    let (_, administrator) = seed_actor(&pool, "admin@example.org", ADMINISTRATOR).await;
+    let (technician_id, _) = seed_actor(&pool, "tech@example.org", TECHNICIAN).await;
+    let (_, alarm_id) = seed_alarm(&pool).await;
+
+    let order = body_json(
+        post(
+            &state,
+            &operator,
+            &format!("/api/alarms/{alarm_id}/dispatch"),
+            json!({"technician_user_id": technician_id, "station_name": "Hadsund"}),
+        )
+        .await,
+    )
+    .await;
+    let order_id = order["id"].as_i64().expect("an order id");
+
+    let response = post(
+        &state,
+        &administrator,
+        &format!("/api/work-orders/{order_id}/complete"),
+        json!({"fault_present": true, "cause": null, "action_taken": null}),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]
