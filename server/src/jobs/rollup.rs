@@ -11,8 +11,8 @@ use crate::db::models::enums::{Metric, RollupResolution};
 use crate::db::models::rollups::NewRollup;
 use crate::db::schema::measurements as measurements_schema;
 use crate::db::schema::rollups as rollups_schema;
+use crate::jobs::median;
 
-///
 const MAX_BUCKETS_PER_RUN: usize = 512;
 
 type Summary = (i64, i64, Metric, f64, f64, f64, f64, f64, i64);
@@ -56,7 +56,7 @@ pub const fn next_bucket(
     bucket_end(resolution, start)
 }
 
-///
+/// Summarize completed buckets of one resolution.
 ///
 /// # Errors
 ///
@@ -98,7 +98,6 @@ pub fn run(
     Ok(written)
 }
 
-///
 fn stored_buckets(
     conn: &mut PgConnection,
     resolution: RollupResolution,
@@ -315,6 +314,7 @@ pub fn horizon(days: u64) -> Option<NaiveDateTime> {
         .map(|date| date.and_time(NaiveTime::MIN))
 }
 
+/// Delete raw windows older than `before`.
 ///
 /// # Errors
 ///
@@ -340,28 +340,6 @@ pub fn prune_rollups(
             .filter(rollups_schema::bucket_start.lt(before)),
     )
     .execute(conn)
-}
-
-fn median(values: &mut [f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-
-    let middle = values.len() / 2;
-    values.select_nth_unstable_by(middle, f64::total_cmp);
-    let upper = values.get(middle).copied()?;
-
-    if values.len() % 2 == 1 {
-        return Some(upper);
-    }
-
-    let lower = values
-        .get(..middle)?
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    Some(f64::midpoint(lower, upper))
 }
 
 #[cfg(test)]

@@ -1,4 +1,7 @@
+use std::collections::{HashMap, HashSet};
+
 use chrono::{Days, NaiveDateTime, TimeDelta, Timelike as _};
+use diesel::QueryableByName;
 use diesel::pg::PgConnection;
 use diesel::prelude::*;
 use serde_json::json;
@@ -8,11 +11,12 @@ use crate::db::models::alarms::NewAlarm;
 use crate::db::models::enums::{AlarmState, Metric, RollupResolution};
 use crate::db::schema::alarm_events as alarm_events_schema;
 use crate::db::schema::alarms as alarms_schema;
-use crate::db::schema::measurements as measurements_schema;
 use crate::db::schema::rollups as rollups_schema;
+use crate::jobs::median;
 
 pub const BASELINE_DAYS: u64 = 28;
 
+/// Below a week of the same hour, the median is a guess, not a baseline.
 pub const MIN_BASELINE_BUCKETS: usize = 7;
 
 /// Band half-width, in robust standard deviations.
@@ -20,8 +24,10 @@ pub const K: f64 = 4.0;
 
 pub const CONSECUTIVE_WINDOWS: usize = 3;
 
+/// Median absolute deviation to standard-deviation equivalent.
 const MAD_TO_SIGMA: f64 = 1.4826;
 
+/// Floor for the spread when MAD is zero.
 const MINIMUM_SPREAD: f64 = 1e-6;
 
 /// What a node normally reads for one metric at one hour of the day.
@@ -56,6 +62,7 @@ impl Baseline {
         value < low || value > high
     }
 
+    /// Deviation in band half-widths; one sits exactly on the edge.
     #[must_use]
     pub fn severity(&self, value: f64) -> f64 {
         (value - self.center).abs() / self.threshold().max(MINIMUM_SPREAD)
@@ -64,82 +71,92 @@ impl Baseline {
 
 type Series = (i64, i64, Metric);
 
+/// Run one detection pass over every series.
+///
 /// # Errors
 ///
 /// Returns the diesel error if any query fails.
 pub fn run(conn: &mut PgConnection, now: NaiveDateTime) -> QueryResult<Vec<i64>> {
-    let mut raised = Vec::new();
+    let hour = now.hour();
+    let windows = recent_windows(conn, now, None)?;
+    if windows.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    for (node_id, channel_id, metric) in recent_series(conn, now)? {
-        let Some(alarm) = examine(conn, node_id, channel_id, metric, now)? else {
+    let baselines = baselines(conn, now, hour, None)?;
+    let open = open_alarms(conn)?;
+
+    let mut series: Vec<Series> = windows.keys().copied().collect();
+    series.sort_unstable();
+
+    let mut raised = Vec::new();
+    for key in series {
+        let (Some(recent), Some(baseline)) = (windows.get(&key), baselines.get(&key)) else {
             continue;
         };
 
-        raised.push(alarm);
+        let Some(verdict) = judge(recent, baseline) else {
+            continue;
+        };
+
+        if open.contains(&key) {
+            continue;
+        }
+
+        raised.push(raise(
+            conn,
+            key.0,
+            Some(key.1),
+            Some(key.2),
+            deviation(key.2, hour, baseline, &verdict),
+        )?);
     }
 
     Ok(raised)
 }
 
-fn recent_series(conn: &mut PgConnection, now: NaiveDateTime) -> QueryResult<Vec<Series>> {
-    let Some(since) = now.checked_sub_signed(TimeDelta::hours(1)) else {
-        return Ok(Vec::new());
-    };
-
-    measurements_schema::table
-        .filter(measurements_schema::window_start.ge(since))
-        .select((
-            measurements_schema::node_id,
-            measurements_schema::channel_id,
-            measurements_schema::metric,
-        ))
-        .distinct()
-        .load(conn)
+struct Verdict {
+    window_start: NaiveDateTime,
+    value: f64,
+    below: bool,
 }
 
-///
-/// # Errors
-///
-/// Returns the diesel error if any query fails.
-pub fn examine(
-    conn: &mut PgConnection,
-    node_id: i64,
-    channel_id: i64,
-    metric: Metric,
-    now: NaiveDateTime,
-) -> QueryResult<Option<i64>> {
-    let recent = recent_windows(conn, node_id, channel_id, metric, CONSECUTIVE_WINDOWS)?;
+fn judge(recent: &[(NaiveDateTime, f64)], baseline: &Baseline) -> Option<Verdict> {
     if recent.len() < CONSECUTIVE_WINDOWS {
-        return Ok(None);
+        return None;
     }
-
-    let hour = now.hour();
-    let Some(baseline) = baseline(conn, node_id, channel_id, metric, hour, now)? else {
-        return Ok(None);
-    };
 
     let (low, high) = baseline.band();
-    let all_below = recent.iter().all(|(_, value)| *value < low);
-    let all_above = recent.iter().all(|(_, value)| *value > high);
-    if !all_below && !all_above {
-        return Ok(None);
+    let below = recent.iter().all(|(_, value)| *value < low);
+    let above = recent.iter().all(|(_, value)| *value > high);
+    if !below && !above {
+        return None;
     }
 
-    if has_open_alarm(conn, node_id, channel_id, metric)? {
-        return Ok(None);
-    }
+    let (window_start, value) = recent.first().copied()?;
 
-    let Some((window_start, value)) = recent.first().copied() else {
-        return Ok(None);
-    };
+    Some(Verdict {
+        window_start,
+        value,
+        below,
+    })
+}
 
-    let explanation = json!({
+fn deviation(
+    metric: Metric,
+    hour: u32,
+    baseline: &Baseline,
+    verdict: &Verdict,
+) -> serde_json::Value {
+    let (low, high) = baseline.band();
+
+    json!({
         "kind": "baseline_deviation",
         "metric": metric.label(),
         "hour_bucket": hour,
-        "window_start": window_start,
-        "value": value,
-        "direction": if all_below { "below" } else { "above" },
+        "window_start": verdict.window_start,
+        "value": verdict.value,
+        "direction": if verdict.below { "below" } else { "above" },
         "baseline": {
             "center": baseline.center,
             "between_hours": baseline.between,
@@ -153,30 +170,122 @@ pub fn examine(
             "low": low,
             "high": high,
         },
-        "severity": baseline.severity(value),
+        "severity": baseline.severity(verdict.value),
         "consecutive_windows": CONSECUTIVE_WINDOWS,
-    });
-
-    raise(conn, node_id, Some(channel_id), Some(metric), explanation).map(Some)
+    })
 }
 
-fn recent_windows(
+/// New alarm id, or `None` when the series is healthy, too new, or already open.
+///
+/// # Errors
+///
+/// Returns the diesel error if any query fails.
+pub fn examine(
     conn: &mut PgConnection,
     node_id: i64,
     channel_id: i64,
     metric: Metric,
-    count: usize,
-) -> QueryResult<Vec<(NaiveDateTime, f64)>> {
-    measurements_schema::table
-        .filter(measurements_schema::node_id.eq(node_id))
-        .filter(measurements_schema::channel_id.eq(channel_id))
-        .filter(measurements_schema::metric.eq(metric))
-        .select((measurements_schema::window_start, measurements_schema::mean))
-        .order(measurements_schema::window_start.desc())
-        .limit(i64::try_from(count).unwrap_or(i64::MAX))
-        .load(conn)
+    now: NaiveDateTime,
+) -> QueryResult<Option<i64>> {
+    let key = (node_id, channel_id, metric);
+    let hour = now.hour();
+
+    let windows = recent_windows(conn, now, Some(key))?;
+    let Some(recent) = windows.get(&key) else {
+        return Ok(None);
+    };
+
+    let Some(baseline) = baseline(conn, node_id, channel_id, metric, hour, now)? else {
+        return Ok(None);
+    };
+
+    let Some(verdict) = judge(recent, &baseline) else {
+        return Ok(None);
+    };
+
+    if has_open_alarm(conn, node_id, channel_id, metric)? {
+        return Ok(None);
+    }
+
+    raise(
+        conn,
+        node_id,
+        Some(channel_id),
+        Some(metric),
+        deviation(metric, hour, &baseline, &verdict),
+    )
+    .map(Some)
 }
 
+#[derive(Debug, QueryableByName)]
+struct WindowRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    node_id: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    channel_id: i64,
+    #[diesel(sql_type = crate::db::schema::sql_types::Metric)]
+    metric: Metric,
+    #[diesel(sql_type = diesel::sql_types::Timestamp)]
+    window_start: NaiveDateTime,
+    #[diesel(sql_type = diesel::sql_types::Double)]
+    mean: f64,
+}
+
+fn recent_windows(
+    conn: &mut PgConnection,
+    now: NaiveDateTime,
+    only: Option<Series>,
+) -> QueryResult<HashMap<Series, Vec<(NaiveDateTime, f64)>>> {
+    let Some(since) = now.checked_sub_signed(TimeDelta::hours(1)) else {
+        return Ok(HashMap::new());
+    };
+
+    let sql = "
+        SELECT node_id, channel_id, metric, window_start, mean
+        FROM (
+            SELECT node_id, channel_id, metric, window_start, mean,
+                   row_number() OVER (
+                       PARTITION BY node_id, channel_id, metric
+                       ORDER BY window_start DESC
+                   ) AS rank
+            FROM measurements
+            WHERE window_start >= $1
+              AND ($2 IS NULL OR node_id = $2)
+              AND ($3 IS NULL OR channel_id = $3)
+        ) ranked
+        WHERE rank <= $4
+        ORDER BY node_id, channel_id, metric, window_start DESC";
+
+    let rows: Vec<WindowRow> = diesel::sql_query(sql)
+        .bind::<diesel::sql_types::Timestamp, _>(since)
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(
+            only.map(|(node_id, _, _)| node_id),
+        )
+        .bind::<diesel::sql_types::Nullable<diesel::sql_types::BigInt>, _>(
+            only.map(|(_, channel_id, _)| channel_id),
+        )
+        .bind::<diesel::sql_types::BigInt, _>(
+            i64::try_from(CONSECUTIVE_WINDOWS).unwrap_or(i64::MAX),
+        )
+        .load(conn)?;
+
+    let mut windows: HashMap<Series, Vec<(NaiveDateTime, f64)>> = HashMap::new();
+    for row in rows {
+        let key = (row.node_id, row.channel_id, row.metric);
+        if only.is_some_and(|wanted| wanted != key) {
+            continue;
+        }
+
+        windows
+            .entry(key)
+            .or_default()
+            .push((row.window_start, row.mean));
+    }
+
+    Ok(windows)
+}
+
+/// Baseline for one series at one hour of day, or `None` if history is too short.
 ///
 /// # Errors
 ///
@@ -189,56 +298,123 @@ pub fn baseline(
     hour: u32,
     now: NaiveDateTime,
 ) -> QueryResult<Option<Baseline>> {
+    let key = (node_id, channel_id, metric);
+
+    Ok(baselines(conn, now, hour, Some(key))?.remove(&key))
+}
+
+fn baseline_buckets(now: NaiveDateTime, hour: u32) -> Vec<NaiveDateTime> {
     let Some(since) = now.checked_sub_days(Days::new(BASELINE_DAYS)) else {
-        return Ok(None);
+        return Vec::new();
     };
 
-    let buckets: Vec<(NaiveDateTime, f64, f64)> = rollups_schema::table
-        .filter(rollups_schema::node_id.eq(node_id))
-        .filter(rollups_schema::channel_id.eq(channel_id))
-        .filter(rollups_schema::metric.eq(metric))
+    (0..=BASELINE_DAYS)
+        .filter_map(|back| {
+            now.checked_sub_days(Days::new(back))?
+                .date()
+                .and_hms_opt(hour, 0, 0)
+        })
+        .filter(|bucket| *bucket >= since && *bucket < now)
+        .collect()
+}
+
+fn baselines(
+    conn: &mut PgConnection,
+    now: NaiveDateTime,
+    hour: u32,
+    only: Option<Series>,
+) -> QueryResult<HashMap<Series, Baseline>> {
+    let buckets = baseline_buckets(now, hour);
+    if buckets.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut query = rollups_schema::table
         .filter(rollups_schema::resolution.eq(RollupResolution::Hourly))
-        .filter(rollups_schema::bucket_start.ge(since))
-        .filter(rollups_schema::bucket_start.lt(now))
+        .filter(rollups_schema::bucket_start.eq_any(buckets))
         .select((
-            rollups_schema::bucket_start,
+            rollups_schema::node_id,
+            rollups_schema::channel_id,
+            rollups_schema::metric,
             rollups_schema::mean,
             rollups_schema::stddev,
         ))
-        .load(conn)?;
+        .into_boxed();
 
-    let mut means: Vec<f64> = Vec::new();
-    let mut spreads: Vec<f64> = Vec::new();
-    for (bucket_start, mean, stddev) in buckets {
-        if bucket_start.hour() != hour {
-            continue;
-        }
-
-        means.push(mean);
-        spreads.push(stddev);
+    if let Some((node_id, channel_id, metric)) = only {
+        query = query
+            .filter(rollups_schema::node_id.eq(node_id))
+            .filter(rollups_schema::channel_id.eq(channel_id))
+            .filter(rollups_schema::metric.eq(metric));
     }
 
+    let rows: Vec<(i64, i64, Metric, f64, f64)> = query.load(conn)?;
+
+    let mut gathered: HashMap<Series, (Vec<f64>, Vec<f64>)> = HashMap::new();
+    for (node_id, channel_id, metric, mean, stddev) in rows {
+        let entry = gathered
+            .entry((node_id, channel_id, metric))
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+        entry.0.push(mean);
+        entry.1.push(stddev);
+    }
+
+    Ok(gathered
+        .into_iter()
+        .filter_map(|(key, (mut means, mut spreads))| {
+            Some((key, fold_baseline(&mut means, &mut spreads)?))
+        })
+        .collect())
+}
+
+fn fold_baseline(means: &mut [f64], spreads: &mut [f64]) -> Option<Baseline> {
     if means.len() < MIN_BASELINE_BUCKETS {
-        return Ok(None);
+        return None;
     }
 
     let buckets = means.len();
-    let Some(center) = median(&mut means) else {
-        return Ok(None);
-    };
+    let center = median(means)?;
 
     let mut deviations: Vec<f64> = means.iter().map(|mean| (mean - center).abs()).collect();
     let between = median(&mut deviations).unwrap_or(0.0) * MAD_TO_SIGMA;
-    let within = median(&mut spreads).unwrap_or(0.0);
+    let within = median(spreads).unwrap_or(0.0);
 
-    Ok(Some(Baseline {
+    Some(Baseline {
         center,
         between,
         within,
         buckets,
-    }))
+    })
 }
 
+fn open_alarms(conn: &mut PgConnection) -> QueryResult<HashSet<Series>> {
+    let rows: Vec<(i64, Option<i64>, Option<Metric>)> = alarms_schema::table
+        .filter(alarms_schema::state.ne(AlarmState::Closed))
+        .select((
+            alarms_schema::node_id,
+            alarms_schema::channel_id,
+            alarms_schema::metric,
+        ))
+        .load(conn)?;
+
+    Ok(rows
+        .into_iter()
+        .filter_map(|(node_id, channel_id, metric)| Some((node_id, channel_id?, metric?)))
+        .collect())
+}
+
+fn silent_nodes(conn: &mut PgConnection) -> QueryResult<HashSet<i64>> {
+    alarms_schema::table
+        .filter(alarms_schema::state.ne(AlarmState::Closed))
+        .filter(alarms_schema::channel_id.is_null())
+        .filter(alarms_schema::metric.is_null())
+        .select(alarms_schema::node_id)
+        .load(conn)
+        .map(|rows: Vec<i64>| rows.into_iter().collect())
+}
+
+/// Whether this series already has an open alarm.
+///
 /// # Errors
 ///
 /// Returns the diesel error if the query fails.
@@ -259,6 +435,7 @@ pub fn has_open_alarm(
     Ok(count > 0)
 }
 
+/// Insert an alarm and its opening event in one transaction.
 ///
 /// # Errors
 ///
@@ -296,7 +473,7 @@ pub fn raise(
     })
 }
 
-///
+/// Minutes a node may go quiet before it counts as silent.
 pub const SILENCE_THRESHOLD_MINUTES: i64 = 10;
 
 /// One node that has stopped delivering.
@@ -308,7 +485,6 @@ pub struct Silence {
 }
 
 /// Raise an alarm for every node that has stopped delivering.
-///
 ///
 /// # Errors
 ///
@@ -330,9 +506,11 @@ pub fn silence(conn: &mut PgConnection, now: NaiveDateTime) -> QueryResult<Vec<S
         ))
         .load(conn)?;
 
+    let already = silent_nodes(conn)?;
+
     let mut raised = Vec::new();
     for (node_id, since) in quiet {
-        if has_open_silence_alarm(conn, node_id)? {
+        if already.contains(&node_id) {
             continue;
         }
 
@@ -351,40 +529,6 @@ pub fn silence(conn: &mut PgConnection, now: NaiveDateTime) -> QueryResult<Vec<S
     }
 
     Ok(raised)
-}
-
-fn has_open_silence_alarm(conn: &mut PgConnection, node_id: i64) -> QueryResult<bool> {
-    let count: i64 = alarms_schema::table
-        .filter(alarms_schema::node_id.eq(node_id))
-        .filter(alarms_schema::channel_id.is_null())
-        .filter(alarms_schema::metric.is_null())
-        .filter(alarms_schema::state.ne(AlarmState::Closed))
-        .count()
-        .get_result(conn)?;
-
-    Ok(count > 0)
-}
-
-fn median(values: &mut [f64]) -> Option<f64> {
-    if values.is_empty() {
-        return None;
-    }
-
-    let middle = values.len() / 2;
-    values.select_nth_unstable_by(middle, f64::total_cmp);
-    let upper = values.get(middle).copied()?;
-
-    if values.len() % 2 == 1 {
-        return Some(upper);
-    }
-
-    let lower = values
-        .get(..middle)?
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    Some(f64::midpoint(lower, upper))
 }
 
 #[cfg(test)]
@@ -454,12 +598,5 @@ mod tests {
     #[test]
     fn the_mad_scaling_matches_a_normal_distribution() {
         assert!(MAD_TO_SIGMA.mul_add(0.674_489_75, -1.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn the_median_of_an_even_set_averages_the_middle_pair() {
-        assert!(median(&mut [1.0, 2.0, 3.0, 4.0]).is_some_and(|v| (v - 2.5).abs() < 1e-9));
-        assert!(median(&mut [3.0, 1.0, 2.0]).is_some_and(|v| (v - 2.0).abs() < 1e-9));
-        assert_eq!(median(&mut []), None);
     }
 }

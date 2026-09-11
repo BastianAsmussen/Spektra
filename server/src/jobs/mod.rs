@@ -10,26 +10,41 @@ use deadpool_diesel::postgres::Pool;
 use crate::notify::{Notice, Ntfy};
 use crate::state::{AlarmEvent, AppState, NodeEvent};
 
-///
+/// Median of a set, in place.
+pub(crate) fn median(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let middle = values.len() / 2;
+    values.select_nth_unstable_by(middle, f64::total_cmp);
+    let upper = values.get(middle).copied()?;
+
+    if values.len() % 2 == 1 {
+        return Some(upper);
+    }
+
+    let lower = values
+        .get(..middle)?
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    Some(f64::midpoint(lower, upper))
+}
+
 const INTERVAL: Duration = Duration::from_hours(1);
-
-///
 const DETECTION_INTERVAL: Duration = Duration::from_mins(1);
-
-///
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Days of partitions kept ahead of the current one.
 const PARTITIONS_AHEAD: u64 = 7;
 
-///
 const RAW_RETENTION_DAYS: u64 = 14;
-
 const HOURLY_RETENTION_DAYS: u64 = 90;
-
 const DAILY_RETENTION_DAYS: u64 = 730;
 
-///
+/// Run the maintenance pass forever, starting immediately.
 pub async fn run(state: AppState) {
     let mut timer = tokio::time::interval(INTERVAL);
 
@@ -45,9 +60,9 @@ pub async fn run(state: AppState) {
 
 /// One maintenance pass.
 ///
-///
 /// # Errors
 ///
+/// Returns a message naming the step that failed.
 pub async fn once(pool: &Pool) -> Result<(), String> {
     let conn = pool.get().await.map_err(|err| err.to_string())?;
     conn.interact(move |conn| {
@@ -86,7 +101,6 @@ pub async fn once(pool: &Pool) -> Result<(), String> {
 }
 
 /// Run the detector forever.
-///
 pub async fn detect(state: AppState, notifier: Option<Ntfy>) {
     let mut timer = tokio::time::interval(DETECTION_INTERVAL);
 
@@ -103,6 +117,7 @@ pub async fn detect(state: AppState, notifier: Option<Ntfy>) {
 ///
 /// # Errors
 ///
+/// Returns a message when a connection cannot be taken or the task panics.
 pub async fn detect_once(state: &AppState, notifier: Option<&Ntfy>) -> Result<(), String> {
     let conn = state
         .ingest_pool
@@ -268,7 +283,6 @@ fn silence_summary(explanation: &serde_json::Value) -> String {
     )
 }
 
-///
 fn deviation_summary(
     metric: crate::db::models::enums::Metric,
     explanation: &serde_json::Value,
@@ -328,7 +342,7 @@ fn prune(conn: &mut diesel::pg::PgConnection) {
     }
 }
 
-///
+/// Sample the counters so the drift page has rates.
 pub async fn sample_throughput(state: AppState) {
     let mut timer = tokio::time::interval(SAMPLE_INTERVAL);
 
