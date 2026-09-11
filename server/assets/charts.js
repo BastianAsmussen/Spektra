@@ -130,7 +130,7 @@
         width: target.clientWidth,
         height: target.clientHeight,
         padding: [8, 8, 0, 0],
-        cursor: { y: false, points: { size: 6 } },
+        cursor: { y: false, points: { show: false } },
         legend: { show: false },
         scales: { x: { time: true } },
         axes: [

@@ -1,13 +1,9 @@
-/* Built by `nix build .#static`, served from SPEKTRA_STATIC_DIR; no CDN. */
 @import "tailwindcss";
 
 @source "../templates";
-
-/* Assembled in JS, so Tailwind's scan for literals would drop them. */
 @source inline("text-green text-yellow text-red text-blue text-overlay0 font-mono");
 
 @theme {
-  /* Not `base`: `text-base` is Tailwind's font-size utility, and the override silently became `color`. */
   --color-canvas: var(--ctp-base);
   --color-mantle: var(--ctp-mantle);
   --color-crust: var(--ctp-crust);
@@ -43,7 +39,6 @@
   --map-tile-filter: none;
 }
 
-/* The `:not([data-theme="light"])` guard lets the header's switch beat a system set to dark. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --ctp-base: #1e1e2e;
@@ -61,12 +56,10 @@
     --ctp-mauve: #cba6f7;
     --ctp-peach: #fab387;
 
-    /* OSM publishes only a light raster style; rotating the hue back keeps water blue-ish. */
     --map-tile-filter: invert(1) hue-rotate(180deg);
   }
 }
 
-/* Written twice: a media query and an attribute selector cannot combine into one "either" rule. */
 :root[data-theme="dark"] {
   --ctp-base: #1e1e2e;
   --ctp-mantle: #181825;
@@ -86,7 +79,6 @@
   --map-tile-filter: invert(1) hue-rotate(180deg);
 }
 
-/* Tailwind v4 resets `button` to `cursor: default`; undone once here, not per control. */
 @layer base {
   button:not(:disabled),
   summary,
@@ -106,13 +98,11 @@
   }
 }
 
-/* Leaflet needs a laid-out height before `L.map` runs. */
 #map {
   height: clamp(14rem, 42vh, 34rem);
   background: var(--ctp-crust);
 }
 
-/* The shell, not the map, so the exit control goes fullscreen too; `map.js` watches `fullscreenchange`. */
 #map-shell:fullscreen {
   display: flex;
   flex-direction: column;
@@ -120,7 +110,6 @@
   width: 100vw;
 }
 
-/* Fullscreen only: in normal flow `flex: 1` sets `flex-basis: 0`, which beats `height` and collapses the map. */
 #map-shell:fullscreen #map {
   height: auto;
   min-height: 0;
@@ -142,7 +131,6 @@
   }
 }
 
-/* `scrollIntoView` subtracts this past the sticky header; the larger value clears its second row. */
 #node-panel {
   scroll-margin-top: 7.5rem;
 }
@@ -153,14 +141,12 @@
   }
 }
 
-/* htmx swaps the lists, so `:has()` rings the wrapper; the fleet's is the section, since its grid keeps empty tracks. */
 main section:has(> #fleet),
 main div:has(> #alarm-feed),
 main div:has(> #work-orders) {
   border-radius: 0.5rem;
 }
 
-/* `outline`, not a border: `outline-offset` stands it off the text and takes no part in layout. */
 main section:has(> #fleet:target),
 main div:has(> #alarm-feed:target),
 main div:has(> #work-orders:target) {
@@ -187,7 +173,6 @@ main div:has(> #work-orders:target) {
   }
 }
 
-/* Sticky header again; the feeds' extra 2rem is their heading, outside the id. */
 #fleet {
   scroll-margin-top: 7.5rem;
 }
@@ -216,7 +201,6 @@ main div:has(> #work-orders:target) {
   height: clamp(9rem, 20vh, 14rem);
 }
 
-/* Scoped for specificity: vendored `uplot.css` loads later; its rgba(0,0,0,0.07) is invisible on Mocha. */
 .uplot .u-select {
   background: color-mix(in srgb, var(--ctp-blue) 28%, transparent);
   border: 1px solid var(--ctp-blue);
@@ -251,7 +235,6 @@ main div:has(> #work-orders:target) {
   transform: translateZ(0);
 }
 
-/* Leaflet's own markup, only recolored, so a vendored upgrade needs no rewrite here. */
 .leaflet-control-attribution,
 .leaflet-control-zoom a {
   background: var(--ctp-mantle);
@@ -277,7 +260,6 @@ main div:has(> #work-orders:target) {
   color: var(--ctp-text);
 }
 
-/* `L.circleMarker` passes `className` to its SVG path, so colors live here, not in JS. */
 .marker {
   stroke: var(--ctp-crust);
   stroke-width: 1.5;
@@ -361,32 +343,9 @@ main div:has(> #work-orders:target) {
   font: inherit;
 }
 
-.u-legend {
-  display: none;
-}
-
 .u-cursor-x,
 .u-cursor-y {
   border-color: var(--ctp-overlay0);
-}
-
-.u-cursor-pt {
-  border-color: var(--ctp-base);
-}
-
-/* uPlot's hover readout. Positioned by uPlot, colored here. */
-.u-tooltip {
-  position: absolute;
-  z-index: 100;
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--ctp-surface0);
-  border-radius: 0.25rem;
-  background: var(--ctp-mantle);
-  color: var(--ctp-text);
-  font-size: 0.75rem;
-  font-family: ui-monospace, monospace;
-  pointer-events: none;
-  white-space: nowrap;
 }
 
 #node-panel:not(:empty) {
