@@ -1,0 +1,18 @@
+{%- import "fragments/icons.html" as icon -%}
+
+{% macro count(id, value, oob, color) %}
+<span id="{{ id }}"{% if oob %} hx-swap-oob="true"{% endif %}
+  class="font-mono tabular-nums {% if value > 0 %}{{ color }}{% else %}text-overlay0{% endif %}">{{ value }}</span>
+{% endmacro %}
+
+{% macro total(value, oob) %}
+<span id="count-nodes"{% if oob %} hx-swap-oob="true"{% endif %}
+  class="font-mono tabular-nums text-text">{{ value }}</span>
+{% endmacro %}
+
+{% macro counts(nodes_total, silent, open_alarms, open_orders, oob) %}
+{% call total(nodes_total, oob) %}{% endcall %}
+{% call count("count-silent", silent, oob, "text-yellow") %}{% endcall %}
+{% call count("count-alarms", open_alarms, oob, "text-red") %}{% endcall %}
+{% call count("count-orders", open_orders, oob, "text-blue") %}{% endcall %}
+{% endmacro %}

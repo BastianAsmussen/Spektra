@@ -69,7 +69,6 @@
   window.spektraFleet = roster;
 
   const states = new Map(roster.map((node) => [node.id, node.state]));
-  let silent = roster.reduce((total, node) => total + (node.state === "silent" ? 1 : 0), 0);
 
   const wanted = new URLSearchParams(location.search).get("state");
   if (stateFilter && wanted &&
@@ -107,89 +106,15 @@
     window.dispatchEvent(new CustomEvent("spektra:refit"));
   });
 
-  let pendingPaint = 0;
-  function paintNodeCounts() {
-    if (!fleet || pendingPaint) {
-      return;
-    }
-
-    pendingPaint = requestAnimationFrame(() => {
-      pendingPaint = 0;
-      set("count-nodes", roster.length, false);
-      set("count-silent", silent, true, "text-yellow");
-    });
-  }
-
-  function recountFeeds() {
-    if (!fleet) {
-      return;
-    }
-
-    const alarms = [...document.querySelectorAll("#alarm-feed [id^='alarm-']")];
-    const orders = [...document.querySelectorAll("#work-orders [data-status]")];
-
-    set(
-      "count-alarms",
-      alarms.filter((alarm) => alarm.dataset.state && alarm.dataset.state !== "closed").length,
-      true,
-      "text-red",
-    );
-    set(
-      "count-orders",
-      orders.filter((order) => order.dataset.status === "assigned").length,
-      true,
-      "text-blue",
-    );
-  }
-
   function observeState(element) {
     const match = /^node-(\d+)-state$/.exec(element.id ?? "");
-    if (!match) {
-      return false;
-    }
-
-    const id = Number(match[1]);
-    const before = states.get(id);
-    const after = element.dataset.state ?? "never seen";
-    if (before === after) {
-      return true;
-    }
-
-    states.set(id, after);
-    if (before === "silent") {
-      silent -= 1;
-    }
-    if (after === "silent") {
-      silent += 1;
-    }
-    paintNodeCounts();
-
-    return true;
-  }
-
-  function set(id, value, colorWhenNonZero, color) {
-    const element = document.getElementById(id);
-    if (!element) {
-      return;
-    }
-
-    element.textContent = String(value);
-    if (colorWhenNonZero) {
-      element.className = `font-mono tabular-nums ${value > 0 ? color : "text-overlay0"}`;
+    if (match) {
+      states.set(Number(match[1]), element.dataset.state ?? "never seen");
     }
   }
 
-  document.body.addEventListener("htmx:oobAfterSwap", (event) => {
-    if (!observeState(event.detail.target)) {
-      recountFeeds();
-    }
-  });
-  document.body.addEventListener("htmx:afterSwap", recountFeeds);
-  document.addEventListener("DOMContentLoaded", () => {
-    applyFilter();
-    paintNodeCounts();
-    recountFeeds();
-  });
+  document.body.addEventListener("htmx:oobAfterSwap", (event) => observeState(event.detail.target));
+  document.addEventListener("DOMContentLoaded", applyFilter);
 
   const clockParts = new Intl.DateTimeFormat("da-DK", {
     timeZone: "Europe/Copenhagen",

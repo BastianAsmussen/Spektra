@@ -28,15 +28,16 @@ use crate::{
     },
 };
 
-const SILENCE_AFTER_SECONDS: i64 = 300;
+/// Seconds a node may stay quiet before a rendered badge calls it silent.
+pub(crate) const SILENCE_AFTER_SECONDS: i64 = 300;
 
-///
 const CHARTED: [Metric; 3] = [
     Metric::SignalStrength,
     Metric::SignalToNoise,
     Metric::DemodErrorRate,
 ];
 
+/// Degrees Celsius.
 const TEMPERATURE_CEILING: f64 = 85.0;
 
 const LOAD_CEILING: f64 = 4.0;
@@ -55,22 +56,18 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
-///
 const RENEW_SECONDS: i64 = 15;
 
 /// The DOM id a channel's live row is addressed by.
-///
 #[must_use]
 pub fn channel_slug(frequency_hz: u64) -> String {
     frequency_hz.to_string()
 }
 
-///
 fn may_inspect(access: &Access, node_id: i64) -> bool {
     access.may_act() && access.visibility.allows(node_id)
 }
 
-///
 async fn begin(state: &AppState, user_id: i64, node_id: i64) -> Result<bool, ApiError> {
     let access = visibility::resolve(state, user_id).await?;
     if !may_inspect(&access, node_id) {
@@ -261,8 +258,6 @@ async fn candidates(
         .collect())
 }
 
-///
-///
 const SPANS: [(&str, &str, i64); 4] = [
     ("6h", "6t", 6),
     ("24h", "24t", 24),
@@ -271,7 +266,6 @@ const SPANS: [(&str, &str, i64); 4] = [
 ];
 
 /// What the panel is asked to show.
-///
 #[derive(Debug, Default, Deserialize)]
 pub struct SpanQuery {
     /// One of the keys in [`SPANS`]. Anything else falls back to the default.
@@ -329,6 +323,7 @@ fn panel_link(node_id: i64, span: &str, show_all: bool) -> (String, String) {
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session or a database failure.
 #[utoipa::path(
     get,
     path = "/api/nodes",
@@ -366,9 +361,6 @@ pub async fn list_nodes(
     Ok(Json(all_nodes))
 }
 
-///
-/// # Errors
-///
 async fn node_panel(
     auth: AuthPage,
     State(state): State<AppState>,
@@ -382,9 +374,9 @@ async fn node_panel(
 
 /// Render one node's panel.
 ///
-///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a forbidden or missing node, or a database or template failure.
 pub async fn panel(
     state: &AppState,
     access: &Access,
@@ -493,7 +485,6 @@ pub async fn panel(
     panel.render().map_err(ApiError::internal)
 }
 
-///
 async fn channels(
     conn: &deadpool_diesel::postgres::Connection,
     node_id: i64,
@@ -574,7 +565,8 @@ async fn channels(
         .collect())
 }
 
-const fn state_of(
+/// The badge a node wears right now.
+pub(crate) const fn state_of(
     suspended: bool,
     last_seen_at: Option<NaiveDateTime>,
     now: NaiveDateTime,
@@ -601,7 +593,6 @@ fn megahertz(frequency_hz: i64) -> String {
     format!("{:.3} MHz", millionths(frequency_hz))
 }
 
-///
 fn millionths(value: i64) -> f64 {
     f64::from(i32::try_from(value.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(0))
         / 1_000_000.0
@@ -638,7 +629,6 @@ struct Sample {
     clock: f64,
 }
 
-///
 fn meters(sample: &Sample) -> Vec<Meter> {
     let Sample {
         load: [one, five, fifteen],

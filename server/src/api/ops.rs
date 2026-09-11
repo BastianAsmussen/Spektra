@@ -18,7 +18,20 @@ use super::series::{Points, Presentation};
 use crate::db::schema::nodes as nodes_schema;
 use crate::ops::{Snapshot, ratio};
 use crate::state::AppState;
-use crate::templates::{DriftTemplate, OpsTilesFragment, stamp_or_empty};
+use crate::templates::{Chrome, DriftTemplate, OpsTilesFragment, stamp_or_empty};
+
+async fn health(state: &AppState) -> Result<(u64, Snapshot, Vec<String>), ApiError> {
+    let conn = state.pool.get().await?;
+    let fleet: i64 = conn
+        .interact(|conn| nodes_schema::table.count().get_result(conn))
+        .await??;
+    let fleet_size = u64::try_from(fleet).unwrap_or(0);
+
+    let metrics = state.metrics.snapshot(&state.ingest_pool);
+    let problems = metrics.problems(chrono::Utc::now().naive_utc(), fleet_size);
+
+    Ok((fleet_size, metrics, problems))
+}
 
 /// All routes under `/api/ops`, plus the page that draws them.
 pub fn routes() -> Router<AppState> {
@@ -42,7 +55,7 @@ pub struct OpsStatus {
     pub metrics: Snapshot,
 }
 
-///
+/// The ingest throughput history.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct ThroughputSeries {
     /// What the source is called, in Danish, for the caption.
@@ -56,6 +69,7 @@ pub struct ThroughputSeries {
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session or a database failure.
 #[utoipa::path(
     get,
     path = "/api/ops/status",
@@ -70,14 +84,7 @@ pub async fn get_status(
     _auth: AuthUser,
     State(state): State<AppState>,
 ) -> Result<Json<OpsStatus>, ApiError> {
-    let conn = state.pool.get().await?;
-    let fleet: i64 = conn
-        .interact(|conn| nodes_schema::table.count().get_result(conn))
-        .await??;
-    let fleet_size = u64::try_from(fleet).unwrap_or(0);
-
-    let metrics = state.metrics.snapshot(&state.ingest_pool);
-    let problems = metrics.problems(chrono::Utc::now().naive_utc(), fleet_size);
+    let (fleet_size, metrics, problems) = health(&state).await?;
 
     Ok(Json(OpsStatus {
         healthy: problems.is_empty(),
@@ -91,6 +98,7 @@ pub async fn get_status(
 ///
 /// # Errors
 ///
+/// Returns [`ApiError`] for a missing session, a non-administrator, or a database failure.
 #[utoipa::path(
     get,
     path = "/api/ops/throughput",
@@ -127,12 +135,10 @@ async fn page(auth: AuthPage, State(state): State<AppState>) -> Result<Html<Stri
     let chrome = pages::chrome_for(&state, user_id).await?;
 
     let html = DriftTemplate {
-        nodes_total: chrome.nodes_total,
-        silent: chrome.silent,
-        open_alarms: chrome.open_alarms,
-        open_orders: chrome.open_orders,
-        user_name: chrome.user_name,
-        user_role: access.role,
+        chrome: Chrome {
+            user_role: access.role,
+            ..chrome
+        },
         live: false,
     }
     .render()
@@ -145,15 +151,8 @@ async fn tiles(auth: AuthPage, State(state): State<AppState>) -> Result<Html<Str
     let user_id = auth.0.session.user_id;
     drop(require_admin(&state, user_id).await?);
 
-    let conn = state.pool.get().await?;
-    let fleet: i64 = conn
-        .interact(|conn| nodes_schema::table.count().get_result(conn))
-        .await??;
-    let fleet_size = u64::try_from(fleet).unwrap_or(0);
-
-    let metrics = state.metrics.snapshot(&state.ingest_pool);
     let rates = state.metrics.rates();
-    let problems = metrics.problems(chrono::Utc::now().naive_utc(), fleet_size);
+    let (_, metrics, problems) = health(&state).await?;
 
     let html = OpsTilesFragment {
         healthy: problems.is_empty(),
@@ -187,7 +186,6 @@ fn danish(value: f64, decimals: usize) -> String {
 }
 
 /// Time every request and record its status.
-///
 pub async fn measure(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let started = Instant::now();
     let response = next.run(request).await;

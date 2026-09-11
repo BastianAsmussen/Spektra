@@ -1,4 +1,5 @@
 {%- import "fragments/icons.html" as icon -%}
+{%- import "fragments/chrome_counts.html" as counters -%}
 
 <header class="sticky top-0 z-500 border-b border-surface0 bg-mantle">
   <div class="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2 sm:px-6 xl:py-0">
@@ -8,33 +9,30 @@
       <span class="hidden text-xs leading-none text-overlay0 sm:inline">signalovervågning</span>
     </a>
 
-    {#- Wraps to its own row rather than hiding: the counters are the densest
-        information on the page.
+    <span hidden hx-get="/fragments/chrome" hx-trigger="every 5s" hx-swap="none"></span>
 
-        A `<nav>`, not the `<dl>` this was: a `<dl>` may only hold `dt`, `dd`
-        or a `div` wrapping those, so it cannot carry the links. -#}
     <nav aria-label="Nøgletal"
       class="order-last flex w-full flex-wrap items-center gap-x-4 gap-y-1 text-xs
         xl:order-0 xl:w-auto xl:gap-5">
       <a href="/#fleet" class="flex items-center gap-1.5 rounded transition hover:text-blue">
         {% call icon::antenna("h-4 w-4 text-overlay0") %}{% endcall %}
         <span class="text-subtext0">Noder</span>
-        <span id="count-nodes" class="font-mono tabular-nums text-text">{{ nodes_total }}</span>
+        {% call counters::total(chrome.nodes_total, false) %}{% endcall %}
       </a>
       <a href="/?state=silent#fleet" class="flex items-center gap-1.5 rounded transition hover:text-blue">
         {% call icon::mute("h-4 w-4 text-overlay0") %}{% endcall %}
         <span class="text-subtext0">Tavse</span>
-        <span id="count-silent" class="font-mono tabular-nums {% if silent > 0 %}text-yellow{% else %}text-overlay0{% endif %}">{{ silent }}</span>
+        {% call counters::count("count-silent", chrome.silent, false, "text-yellow") %}{% endcall %}
       </a>
       <a href="/#alarm-feed" class="flex items-center gap-1.5 rounded transition hover:text-blue">
         {% call icon::bell("h-4 w-4 text-overlay0") %}{% endcall %}
         <span class="text-subtext0">Alarmer</span>
-        <span id="count-alarms" class="font-mono tabular-nums {% if open_alarms > 0 %}text-red{% else %}text-overlay0{% endif %}">{{ open_alarms }}</span>
+        {% call counters::count("count-alarms", chrome.open_alarms, false, "text-red") %}{% endcall %}
       </a>
       <a href="/#work-orders" class="flex items-center gap-1.5 rounded transition hover:text-blue">
         {% call icon::wrench("h-4 w-4 text-overlay0") %}{% endcall %}
         <span class="text-subtext0">Ordrer</span>
-        <span id="count-orders" class="font-mono tabular-nums {% if open_orders > 0 %}text-blue{% else %}text-overlay0{% endif %}">{{ open_orders }}</span>
+        {% call counters::count("count-orders", chrome.open_orders, false, "text-blue") %}{% endcall %}
       </a>
     </nav>
 
@@ -67,15 +65,15 @@
           class="flex h-8 list-none items-center gap-2 rounded border border-surface0 px-2 text-xs
             text-subtext0 transition hover:border-blue hover:text-text [&::-webkit-details-marker]:hidden">
           {% call icon::menu("h-4 w-4") %}{% endcall %}
-          <span class="hidden leading-none sm:inline">{{ user_name }}</span>
+          <span class="hidden leading-none sm:inline">{{ chrome.user_name }}</span>
         </summary>
 
         <div id="menu"
           class="absolute right-0 z-500 mt-1 w-60 rounded border border-surface0 bg-mantle p-1
             shadow-lg shadow-crust/40">
           <p class="px-3 py-2 text-xs leading-relaxed text-overlay0">
-            {{ user_name }}<br>
-            <span class="font-mono">{{ user_role }}</span>
+            {{ chrome.user_name }}<br>
+            <span class="font-mono">{{ chrome.user_role }}</span>
           </p>
           <hr class="my-1 border-surface0">
           <a href="/" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
@@ -87,7 +85,7 @@
           <a href="/#work-orders" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
             {% call icon::wrench("h-4 w-4 text-overlay0") %}{% endcall %}Arbejdsordrer
           </a>
-          {% if user_role == "administrator" %}
+          {% if chrome.user_role == "administrator" %}
             <a href="/admin" class="flex items-center gap-2 rounded px-3 py-2 text-sm text-text hover:bg-surface0">
               {% call icon::sliders("h-4 w-4 text-overlay0") %}{% endcall %}Administration
             </a>
