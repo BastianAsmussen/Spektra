@@ -3,6 +3,8 @@ use std::fmt::{self, Display};
 use num_complex::Complex32;
 use soapysdr::{Direction::Rx, Error as SoapyError, ErrorCode, RxStream};
 
+use crate::dsp::convert;
+
 const READ_TIMEOUT_US: i64 = 1_000_000;
 
 /// Receiver families the agent supports.
@@ -44,6 +46,7 @@ impl Display for Device {
 pub struct DeviceConfig {
     pub device: Device,
     pub sample_rate_hz: u32,
+    /// Receiver gain in dB, or `None` for the driver's AGC.
     pub gain_db: Option<f64>,
 }
 
@@ -64,6 +67,7 @@ pub enum SourceError {
     NoDevice { device: Device },
     /// The configured sample rate is above what the family supports.
     SampleRateTooHigh { requested: u32, maximum: u32 },
+    /// The driver dropped samples.
     Overflow,
     /// The requested frequency is outside what a tuner can be asked for.
     FrequencyOutOfRange { frequency_hz: u64 },
@@ -109,7 +113,6 @@ pub struct Source {
 
 /// Reject a sample rate the configured family cannot deliver.
 ///
-///
 /// # Errors
 ///
 /// [`SourceError::SampleRateTooHigh`] when the rate exceeds the maximum.
@@ -130,6 +133,7 @@ pub const fn check_sample_rate(config: &DeviceConfig) -> Result<(), SourceError>
 ///
 /// # Errors
 ///
+/// [`SourceError::SampleRateTooHigh`], [`SourceError::NoDevice`], or [`SourceError::Soapy`].
 pub fn open(config: &DeviceConfig) -> Result<Source, SourceError> {
     check_sample_rate(config)?;
 
@@ -143,6 +147,22 @@ pub fn open(config: &DeviceConfig) -> Result<Source, SourceError> {
     let device = soapysdr::Device::new(filter.as_str())?;
 
     device.set_sample_rate(Rx, 0, f64::from(config.sample_rate_hz))?;
+
+    let maximum = usize::try_from(config.device.max_sample_rate_hz()).unwrap_or(usize::MAX);
+    let settled = u32::try_from(convert::to_index(
+        device.sample_rate(Rx, 0)?.round(),
+        maximum,
+    ))
+    .unwrap_or(config.sample_rate_hz);
+
+    if settled != config.sample_rate_hz {
+        tracing::warn!(
+            requested_hz = config.sample_rate_hz,
+            settled_hz = settled,
+            "the driver did not accept the configured sample rate"
+        );
+    }
+
     match config.gain_db {
         Some(gain) => {
             device.set_gain_mode(Rx, 0, false)?;
@@ -157,7 +177,10 @@ pub fn open(config: &DeviceConfig) -> Result<Source, SourceError> {
     Ok(Source {
         device,
         stream,
-        config: *config,
+        config: DeviceConfig {
+            sample_rate_hz: settled,
+            ..*config
+        },
     })
 }
 
@@ -170,17 +193,19 @@ impl Drop for Source {
 }
 
 /// A receiver the sampling loop can drive.
-///
 pub trait IqSource {
+    /// Retune to a channel's center frequency, returning how far the receiver landed from it in Hz.
     ///
     /// # Errors
     ///
-    fn tune(&mut self, frequency_hz: u64) -> Result<(), SourceError>;
+    /// [`SourceError`] as reported by the receiver.
+    fn tune(&mut self, frequency_hz: u64) -> Result<f64, SourceError>;
 
     /// Fill `buffer` with IQ samples, returning how many landed.
     ///
     /// # Errors
     ///
+    /// [`SourceError`] as reported by the receiver.
     fn read_iq(&mut self, buffer: &mut [Complex32]) -> Result<usize, SourceError>;
 
     /// The configuration this source runs under.
@@ -188,7 +213,7 @@ pub trait IqSource {
 }
 
 impl IqSource for Source {
-    fn tune(&mut self, frequency_hz: u64) -> Result<(), SourceError> {
+    fn tune(&mut self, frequency_hz: u64) -> Result<f64, SourceError> {
         let frequency = f64::from(
             u32::try_from(frequency_hz)
                 .map_err(|_| SourceError::FrequencyOutOfRange { frequency_hz })?,
@@ -196,7 +221,7 @@ impl IqSource for Source {
 
         self.device.set_frequency(Rx, 0, frequency, ())?;
 
-        Ok(())
+        Ok(self.device.frequency(Rx, 0)? - frequency)
     }
 
     fn read_iq(&mut self, buffer: &mut [Complex32]) -> Result<usize, SourceError> {
@@ -209,11 +234,9 @@ impl IqSource for Source {
 }
 
 const SYNTHETIC_DEVIATION_HZ: f64 = 60_000.0;
-
 const SYNTHETIC_TONE_HZ: f64 = 1_000.0;
 
 /// An in-process FM carrier, for running without hardware.
-///
 pub struct Synthetic {
     config: DeviceConfig,
     phase: f64,
@@ -253,7 +276,7 @@ impl Synthetic {
 }
 
 impl IqSource for Synthetic {
-    fn tune(&mut self, frequency_hz: u64) -> Result<(), SourceError> {
+    fn tune(&mut self, frequency_hz: u64) -> Result<f64, SourceError> {
         if !(87_500_000..=240_000_000).contains(&frequency_hz) {
             return Err(SourceError::FrequencyOutOfRange { frequency_hz });
         }
@@ -268,7 +291,7 @@ impl IqSource for Synthetic {
         self.phase = 0.0;
         self.tone_phase = 0.0;
 
-        Ok(())
+        Ok(0.0)
     }
 
     fn read_iq(&mut self, buffer: &mut [Complex32]) -> Result<usize, SourceError> {

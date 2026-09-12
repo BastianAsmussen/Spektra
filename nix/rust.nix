@@ -93,6 +93,29 @@
           ../server/templates
         ];
       };
+
+      crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+      craneCross = inputs.crane.mkLib crossPkgs;
+
+      crossArgs = {
+        inherit src;
+
+        strictDeps = true;
+        pname = "node-agent";
+        cargoExtraArgs = "--locked --package node-agent";
+
+        buildInputs = [ crossPkgs.soapysdr ];
+        nativeBuildInputs = with crossPkgs; [
+          protobuf
+          pkg-config
+          rustPlatform.bindgenHook
+        ];
+
+        depsBuildBuild = [ crossPkgs.stdenv.cc ];
+
+        CARGO_BUILD_TARGET = "aarch64-unknown-linux-gnu";
+        CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = "${crossPkgs.stdenv.cc.targetPrefix}cc";
+      };
     in
     {
       formatter = pkgs.nixfmt-tree;
@@ -133,6 +156,22 @@
           name = "node-agent";
           description = "Spektra node agent: SDR sampling, local DSP, aggregation and reporting.";
         };
+
+        node-agent-aarch64 = craneCross.buildPackage (
+          crossArgs
+          // {
+            cargoArtifacts = craneCross.buildDepsOnly crossArgs;
+
+            doCheck = false;
+            meta = {
+              description = "Spektra node agent, cross-built for the aarch64 radio node.";
+              license = lib.licenses.mit;
+              maintainers = [ lib.maintainers.BastianAsmussen ];
+              platforms = [ "aarch64-linux" ];
+              mainProgram = "node-agent";
+            };
+          }
+        );
       };
 
       checks = {
@@ -202,9 +241,11 @@
             fi
           '')
           soapysdr-with-plugins
+          rtl-sdr
+          airspy
         ];
 
-        SOAPY_SDR_PLUGIN_PATH = "${pkgs.soapysdr-with-plugins}/lib/SoapySDR/modules0.8";
+        SOAPY_SDR_PLUGIN_PATH = "${pkgs.soapysdr-with-plugins}/${pkgs.soapysdr-with-plugins.searchPath}";
         RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
       };
     };

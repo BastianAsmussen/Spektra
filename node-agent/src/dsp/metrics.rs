@@ -4,18 +4,17 @@ use super::convert::narrow;
 use super::welch::Psd;
 use crate::report::MetricSample;
 
+/// Occupied FM bandwidth in Hz (Carson: 2*(75 kHz + 15 kHz)).
 pub const FM_BANDWIDTH_HZ: u32 = 180_000;
 
+/// Occupied DAB ensemble bandwidth in Hz.
 pub const DAB_BANDWIDTH_HZ: u32 = 1_536_000;
 
 const GUARD_INNER: f64 = 1.5;
-
 const GUARD_OUTER: f64 = 0.95;
-
 const MINIMUM_GUARD_BINS: usize = 16;
-
+/// Occupancy threshold as a power ratio (4 = 6 dB).
 const OCCUPANCY_THRESHOLD: f64 = 4.0;
-
 const FLOOR: f64 = 1e-30;
 
 /// What the node was asked to measure on one channel.
@@ -23,6 +22,7 @@ const FLOOR: f64 = 1e-30;
 pub struct ChannelSpec {
     pub frequency_hz: u64,
     pub modulation: Modulation,
+    /// Occupied bandwidth in Hz, or zero for the modulation default.
     pub bandwidth_hz: u32,
 }
 
@@ -43,7 +43,7 @@ impl ChannelSpec {
 
 /// Derive every spectrum metric this build supports for one channel.
 #[must_use]
-pub fn derive(psd: &Psd, spec: &ChannelSpec) -> Vec<MetricSample> {
+pub fn derive(psd: &Psd, spec: &ChannelSpec, lo_error_hz: f64) -> Vec<MetricSample> {
     let half_width = f64::from(spec.effective_bandwidth_hz()) / 2.0;
     let band = psd.band(half_width);
     if band.is_empty() {
@@ -73,7 +73,7 @@ pub fn derive(psd: &Psd, spec: &ChannelSpec) -> Vec<MetricSample> {
         ),
         sample(
             Metric::CarrierOffset,
-            carrier_offset(psd, &band, floor_per_bin),
+            carrier_offset(psd, &band, floor_per_bin) + lo_error_hz,
         ),
         sample(
             Metric::SpectrumOccupancy,
@@ -274,7 +274,11 @@ mod tests {
 
     #[test]
     fn every_derived_metric_is_produced() {
-        let samples = derive(&spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.01)), &spec());
+        let samples = derive(
+            &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.01)),
+            &spec(),
+            0.0,
+        );
 
         for metric in crate::dsp::DERIVED_METRICS {
             assert!(
@@ -288,7 +292,7 @@ mod tests {
     fn the_carrier_offset_recovers_an_injected_offset() {
         for offset in [-40_000.0, -1_000.0, 0.0, 2_500.0, 50_000.0] {
             let psd = spectrum(&signal(FFT_SIZE * 16, offset, 0.5, 0.002));
-            let recovered = value(&derive(&psd, &spec()), Metric::CarrierOffset);
+            let recovered = value(&derive(&psd, &spec(), 0.0), Metric::CarrierOffset);
 
             assert!(
                 (recovered - offset).abs() < psd.bin_width_hz(),
@@ -301,11 +305,19 @@ mod tests {
     #[test]
     fn a_stronger_carrier_reads_a_higher_signal_strength() {
         let weak = value(
-            &derive(&spectrum(&signal(FFT_SIZE * 8, 0.0, 0.05, 0.002)), &spec()),
+            &derive(
+                &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.05, 0.002)),
+                &spec(),
+                0.0,
+            ),
             Metric::SignalStrength,
         );
         let strong = value(
-            &derive(&spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.002)), &spec()),
+            &derive(
+                &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.002)),
+                &spec(),
+                0.0,
+            ),
             Metric::SignalStrength,
         );
 
@@ -316,11 +328,19 @@ mod tests {
     #[test]
     fn the_signal_to_noise_ratio_tracks_the_injected_one() {
         let quiet = value(
-            &derive(&spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.0005)), &spec()),
+            &derive(
+                &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.0005)),
+                &spec(),
+                0.0,
+            ),
             Metric::SignalToNoise,
         );
         let noisy = value(
-            &derive(&spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.05)), &spec()),
+            &derive(
+                &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.05)),
+                &spec(),
+                0.0,
+            ),
             Metric::SignalToNoise,
         );
 
@@ -333,7 +353,11 @@ mod tests {
     #[test]
     fn a_bare_carrier_occupies_little_of_its_channel() {
         let occupancy = value(
-            &derive(&spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.002)), &spec()),
+            &derive(
+                &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.5, 0.002)),
+                &spec(),
+                0.0,
+            ),
             Metric::SpectrumOccupancy,
         );
 

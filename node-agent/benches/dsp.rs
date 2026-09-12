@@ -15,13 +15,9 @@ use num_complex::Complex32;
 use protocol::v1::Modulation;
 
 const SAMPLE_RATE: u32 = 2_400_000;
-
 const BASEBAND_RATE: u32 = 240_000;
-
 const BLOCK: usize = 0x0001_0000;
-
 const FFT_SIZES: [usize; 2] = [0x2000, 0x8000];
-
 const TAPS: usize = 101;
 
 struct Noise(u64);
@@ -100,7 +96,7 @@ fn metrics(c: &mut Criterion) {
             BenchmarkId::from_parameter(fft_size),
             &psd,
             |bencher, psd| {
-                bencher.iter(|| derive(std::hint::black_box(psd), &spec));
+                bencher.iter(|| derive(std::hint::black_box(psd), &spec, 0.0));
             },
         );
     }

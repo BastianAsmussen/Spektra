@@ -10,12 +10,8 @@ use crate::dsp::{ChannelSpec, Welch, derive};
 use crate::report::{ChannelIdentity, MetricSample};
 use crate::source::IqSource;
 
-///
 const BLOCK_SAMPLES: usize = 0x0001_0000;
-
-///
 const SETTLE: Duration = Duration::from_millis(50);
-
 const IDLE: Duration = Duration::from_secs(5);
 
 /// One channel the sampler visits.
@@ -39,6 +35,7 @@ impl Assignment {
 /// The set of channels a node is currently assigned, and its version.
 #[derive(Debug, Clone, Default)]
 pub struct Plan {
+    /// Server plan version; zero if none has been served.
     pub version: u64,
     pub channels: Vec<Assignment>,
 }
@@ -52,7 +49,6 @@ pub enum Event {
         samples: Vec<MetricSample>,
     },
     /// A channel could not be measured, with the reason.
-    ///
     Failed { frequency_hz: u64, reason: String },
 }
 
@@ -65,6 +61,7 @@ pub struct Sampler<S> {
 }
 
 impl<S: IqSource> Sampler<S> {
+    /// Build a sampler over `source` at `fft_size` bins, dwelling `dwell` per channel.
     ///
     /// # Errors
     ///
@@ -81,7 +78,6 @@ impl<S: IqSource> Sampler<S> {
     }
 
     /// Visit the assigned channels in turn until `running` clears.
-    ///
     pub fn run(
         mut self,
         plan: &watch::Receiver<Plan>,
@@ -119,12 +115,15 @@ impl<S: IqSource> Sampler<S> {
     fn dwell_on(&mut self, assignment: &Assignment) -> Event {
         let frequency_hz = assignment.identity.frequency_hz;
 
-        if let Err(err) = self.source.tune(frequency_hz) {
-            return Event::Failed {
-                frequency_hz,
-                reason: err.to_string(),
-            };
-        }
+        let lo_error_hz = match self.source.tune(frequency_hz) {
+            Ok(error) => error,
+            Err(err) => {
+                return Event::Failed {
+                    frequency_hz,
+                    reason: err.to_string(),
+                };
+            }
+        };
 
         if let Err(err) = self.discard(SETTLE) {
             return Event::Failed {
@@ -160,7 +159,7 @@ impl<S: IqSource> Sampler<S> {
 
         Event::Measured {
             channel: assignment.identity.clone(),
-            samples: derive(&psd, &assignment.spec()),
+            samples: derive(&psd, &assignment.spec(), lo_error_hz),
         }
     }
 
@@ -180,7 +179,6 @@ impl<S: IqSource> Sampler<S> {
 }
 
 /// Start a sampler on its own thread.
-///
 pub fn spawn<S: IqSource + Send + 'static>(
     sampler: Sampler<S>,
     plan: watch::Receiver<Plan>,
