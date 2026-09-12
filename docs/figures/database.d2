@@ -1,0 +1,182 @@
+#
+# The uniform audit columns (created_at, updated_at) are left out to keep the
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+
+direction: right
+
+adgang: "Adgang" {
+  roles: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "name varchar(32)": "" {constraint: unique}
+    "description text": ""
+  }
+  users: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "email varchar(320)": "" {constraint: unique}
+    "password_hash text": ""
+    "full_name varchar(100)": ""
+    "role_id bigint": "" {constraint: foreign_key}
+    "deactivated boolean": ""
+  }
+  sessions: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "token varchar(255)": "" {constraint: unique}
+    "user_id bigint": "" {constraint: foreign_key}
+    "expires_at timestamp": ""
+    "last_used_at timestamp": ""
+  }
+
+  users."role_id bigint" -> roles."id bigserial"
+  sessions."user_id bigint" -> users."id bigserial"
+}
+
+flaade: "Flåde" {
+  nodes: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "external_identity varchar(64)": "" {constraint: unique}
+    "name varchar(100)": ""
+    "latitude float8": ""
+    "longitude float8": ""
+    "hardware jsonb": ""
+    "capabilities jsonb": ""
+    "suspended boolean": ""
+    "report_interval_seconds int": ""
+    "channel_plan_version bigint": ""
+    "owner_id bigint": "" {constraint: foreign_key}
+    "last_seen_at timestamp": ""
+  }
+  node_credentials: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "node_id bigint": "" {constraint: foreign_key}
+    "token varchar(255)": "" {constraint: unique}
+    "expires_at timestamp": ""
+    "revoked_at timestamp": ""
+  }
+  channels: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "name varchar(100)": ""
+    "frequency_hz bigint": "" {constraint: unique}
+    "modulation modulation": "" {constraint: unique}
+  }
+  node_channels: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "node_id bigint": "" {constraint: foreign_key}
+    "channel_id bigint": "" {constraint: foreign_key}
+    "bandwidth_hz integer": ""
+  }
+
+  node_credentials."node_id bigint" -> nodes."id bigserial"
+  node_channels."node_id bigint" -> nodes."id bigserial"
+  node_channels."channel_id bigint" -> channels."id bigserial"
+}
+
+maaledata: "Måledata" {
+  measurements: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "window_start timestamp": "" {constraint: primary_key}
+    "node_id bigint": "" {constraint: foreign_key}
+    "channel_id bigint": "" {constraint: foreign_key}
+    "metric metric": ""
+    "window_end timestamp": ""
+    "min float8": ""
+    "max float8": ""
+    "mean float8": ""
+    "median float8": ""
+    "stddev float8": ""
+    "p95 float8": ""
+    "sample_count bigint": ""
+  }
+  rollups: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "node_id bigint": "" {constraint: foreign_key}
+    "channel_id bigint": "" {constraint: foreign_key}
+    "metric metric": ""
+    "resolution rollup_resolution": ""
+    "bucket_start timestamp": ""
+    "bucket_end timestamp": ""
+    "min float8": ""
+    "max float8": ""
+    "mean float8": ""
+    "median float8": ""
+    "stddev float8": ""
+    "sample_count bigint": ""
+  }
+  node_health: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "node_id bigint": "" {constraint: foreign_key}
+    "measured_at timestamp": "" {constraint: unique}
+    "uptime_seconds float8": ""
+    "load_1m float8": ""
+    "load_5m float8": ""
+    "load_15m float8": ""
+    "cpu_temperature_celsius float8": ""
+    "clock_offset_seconds float8": ""
+  }
+}
+
+haendelser: "Hændelser" {
+  alarms: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "node_id bigint": "" {constraint: foreign_key}
+    "channel_id bigint": "" {constraint: foreign_key}
+    "metric metric": ""
+    "state alarm_state": ""
+    "explanation jsonb": ""
+    "raised_at timestamp": ""
+    "closed_at timestamp": ""
+  }
+  alarm_events: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "alarm_id bigint": "" {constraint: foreign_key}
+    "from_state alarm_state": ""
+    "to_state alarm_state": ""
+    "changed_by_user_id bigint": "" {constraint: foreign_key}
+    "reason text": ""
+  }
+  work_orders: {
+    shape: sql_table
+    "id bigserial": "" {constraint: primary_key}
+    "alarm_id bigint": "" {constraint: foreign_key}
+    "technician_user_id bigint": "" {constraint: foreign_key}
+    "station_name text": ""
+    "status work_order_status": ""
+    "fault_present boolean": ""
+    "cause text": ""
+    "action_taken text": ""
+    "completed_at timestamp": ""
+  }
+
+  alarm_events."alarm_id bigint" -> alarms."id bigserial"
+  work_orders."alarm_id bigint" -> alarms."id bigserial"
+}
+
+flaade.nodes."owner_id bigint" -> adgang.users."id bigserial"
+
+maaledata.measurements."node_id bigint" -> flaade.nodes."id bigserial"
+maaledata.measurements."channel_id bigint" -> flaade.channels."id bigserial"
+maaledata.rollups."node_id bigint" -> flaade.nodes."id bigserial"
+maaledata.rollups."channel_id bigint" -> flaade.channels."id bigserial"
+maaledata.node_health."node_id bigint" -> flaade.nodes."id bigserial"
+
+haendelser.alarms."node_id bigint" -> flaade.nodes."id bigserial"
+haendelser.alarms."channel_id bigint" -> flaade.channels."id bigserial"
+haendelser.alarm_events."changed_by_user_id bigint" -> adgang.users."id bigserial"
+haendelser.work_orders."technician_user_id bigint" -> adgang.users."id bigserial"
