@@ -1,0 +1,53 @@
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+
+direction: right
+
+node_agent: "Node-agent" {
+  shape: rectangle
+  style.border-radius: 4
+  sampling: "SDR + signalkæde"
+  aggregate: "Aggregering + journal"
+  report: "gRPC-klient"
+}
+
+server: "Central server" {
+  shape: rectangle
+  style.border-radius: 4
+  ingest: "Dataindtag + validering"
+  store: "PostgreSQL + fortætning"
+  detect: "Baseline + detektor"
+  api: "REST, HTMX, WebSocket"
+}
+
+web: "Webklient" {
+  shape: rectangle
+  style.border-radius: 4
+  ui: "Kort, tidsserier, alarmer"
+  live: "Live-status"
+}
+
+protocol: "Protokolspecifikation" {
+  shape: rectangle
+  style.border-radius: 4
+  style.stroke-dash: 3
+  schema: "proto/v1/*.proto"
+  note: "Selvstændig leverance"
+}
+
+node_agent -> server: "gRPC / protobuf\n(TLS)" {
+  style.bold: true
+}
+server -> web: "HTTP + WebSocket\n(HTML-fragmenter)" {
+  style.bold: true
+}
+protocol -> node_agent: "genererer klient" {
+  style.stroke-dash: 3
+}
+protocol -> server: "genererer tjeneste" {
+  style.stroke-dash: 3
+}
