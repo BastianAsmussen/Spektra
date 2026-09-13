@@ -162,3 +162,165 @@ kvalitet lagres.
 
 Der udvikles ikke en native mobilapplikation, og DAB+ understøttes ikke i denne
 version.
+
+
+# Teknisk produktdokumentation
+
+
+## Overordnet arkitektur
+
+Systemet består af fire komponenter og to grænseflader. Arkitekturen er vist i
+bilag 1.
+
+**Node-agenten** afvikles på en enkeltkortscomputer med en tilsluttet
+SDR-modtager. Den henter sin kanalplan fra serveren, sampler hver tildelt kanal
+efter tur i et kanalophold af fast længde (`--dwell-seconds`), udleder fem
+kvalitetsmetrikker af det rå IQ-signal,
+aggregerer dem over et konfigurerbart tidsvindue og afleverer ét statistisk
+sammendrag pr. kanal og metrik. Rå samples forlader aldrig noden.
+
+**Den centrale server** modtager, validerer og persisterer måledata,
+vedligeholder en rullende baseline pr. node, kanal og metrik, detekterer
+afvigelser, administrerer alarmer og arbejdsordrer, udsender notifikationer og
+overvåger sin egen driftstilstand.
+
+**Webklienten** er den operative grænseflade. Serveren renderer HTML-fragmenter,
+som klienten indsætter uden at genindlæse siden, og nye alarmer og
+nodetilstande skubbes over en WebSocket-forbindelse.
+
+**Protokolspecifikationen** er en selvstændig, versioneret leverance. Den
+beskriver dataformat, transport, autentificering og versioneringsregler i et
+maskinlæsbart skema, så en tredjepart kan implementere en node uden adgang til
+node-agentens kildekode.
+
+Mellem node og server tales gRPC over protobuf, hvor skemaet er kontrakten og en
+fremmed implementation kan generere sin egen klient af den. Mellem server og
+webklient tales HTTP med HTML-svar samt en WebSocket til hændelser. En node og
+en browser har ikke samme behov, og et fælles format til begge ville tvinge det
+ene til at bære det andets begrænsninger.
+
+
+### Dataflow
+
+1. Node-agenten sampler kanalen og udleder metrikkerne lokalt.
+2. Agenten aggregerer over rapportvinduet og sender ét `MeasurementReport`.
+3. Serveren validerer rapporten mod skemaet og mod fysisk meningsfulde
+   værdiintervaller.
+4. Målingerne persisteres i den partitionerede `measurements`-tabel.
+5. Fortætningsjobbet opsummerer de rå vinduer i time-, dags- og ugeopløsning.
+6. Detektoren bygger en baseline pr. time på døgnet og sammenholder de seneste
+   vinduer med den.
+7. En afvigelse rejser en alarm, som skubbes til åbne klienter og kan sendes
+   videre til abonnenter over ntfy.
+8. En operatør omsætter alarmen til en arbejdsordre, en tekniker efterprøver
+   fejlen på stedet, og resultatet føres tilbage til den udløsende alarm.
+
+Trin 5 og 6 kører som baggrundsjob på hver sin timer og ikke som en del af
+dataindtaget. En langsom fortætning må ikke kunne forsinke modtagelsen af en
+måling, og en stoppet detektor må ikke kunne fremstå som en flåde uden fejl.
+Begge tilstande er selvstændigt overvåget.
+
+Hele systemet bygges, testes og udrulles automatisk fra det samme repository.
+Et push kører kompilering, statisk analyse og den fulde testsuite, og
+udrulningen til den publicerede server sker først, når testkørslen er
+gennemført uden fejl. Værtens konfiguration er deklareret i samme repository
+som applikationen, så en udrulning ikke kan komme til at afvige fra det, der
+blev testet. Se kapitlet Drift og udrulning.
+
+
+## Protokol
+
+Protokollen er en selvstændig leverance og ikke en intern detalje i serveren.
+Den ligger i sin egen pakke, `protocol/`, og består af syv skemafiler under
+`proto/v1/`. En tredjepart kan generere en klient direkte af skemaet og
+implementere en node uden adgang til node-agentens kildekode, som K1 kræver.
+
+| Skemafil | Indhold |
+| --- | --- |
+| `common.proto` | Modulationer, metrikker, statistisk sammendrag og rapportplan |
+| `node.proto` | Selvregistrering: identitet, placering, hardware og evner |
+| `channel.proto` | Kanalplanen, som serveren tildeler den enkelte node |
+| `measurement.proto` | Målerapporten og kvitteringen for den |
+| `health.proto` | Nodens rapportering af sin egen driftstilstand |
+| `live.proto` | Live-inspektion af et enkelt kanalophold, som aldrig persisteres |
+| `ingest.proto` | Tjenesten `NodeIngest` med de seks kald |
+
+
+### Versionering
+
+Versionen optræder to steder. Den er en del af pakkenavnet, `spektra.v1`, så
+hver version er sin egen tjeneste med sine egne stier, og den gentages som et
+eksplicit felt `protocol_version` på hver eneste anmodning.
+
+En anmodning til en sti, serveren ikke længere registrerer, besvares med
+`UNIMPLEMENTED`. En anmodning, hvis `protocol_version` ikke svarer til den
+tjeneste, den rammer, afvises med `INVALID_ARGUMENT`. Så længe serveren
+registrerer flere versioner samtidigt, betjenes de side om side; det er den
+overgangsperiode, K1 kræver. Feltet er ikke redundant i forhold til
+pakkenavnet: det fanger en klient, der er genereret af ét skema og peget mod en
+anden tjeneste. Uden feltet ville den fejl først vise sig som mærkelige data.
+
+
+### Selvregistrering og evner
+
+En node registrerer sig selv ved første opstart med en identitet, den selv
+persisterer på tværs af genstarter, et visningsnavn, en placering, en
+beskrivelse af modtagerkæden og en liste over de metrikker og modulationer, den
+kan levere. Serveren svarer med nodens id, en bearer-legitimation til alle
+senere kald og sit eget ur.
+
+Registrering med en identitet, serveren allerede kender, afvises med
+`ALREADY_EXISTS`. En node med en gemt legitimation bruger den og registrerer sig
+ikke igen.
+
+`Capabilities` er grunden til, at serveren kan håndtere noder med forskellige
+måleevner. En modtager, der ikke kan udlede en metrik, udelader den i stedet for
+at rapportere et gæt, og serveren behandler fravær som fravær og ikke som nul.
+
+
+### Kanalplanen
+
+En node bestemmer ikke selv, hvad den lytter på. Serveren ejer kanalplanen, og
+noden beder om sin egen, så en modtager kan omdisponeres uden at røre ved noden
+eller udrulle den igen.
+
+Planen bærer en monotont voksende version. Noden spørger med den version, den
+har, og genopbygger kun sin sampleplan, når serveren svarer med en højere. En
+uændret plan koster én lille rundtur. Versionen vedligeholdes ikke af
+applikationskoden, men af en databasetrigger på `node_channels`, så den ikke kan
+komme til at stå stille, fordi en skrivning gik uden om den rigtige funktion.
+
+
+### Rapportkadencen
+
+Hver kvittering kan bære en `ReportSchedule` med det tidspunkt, serveren ønsker
+den næste levering. Noden måler på sin egen kadence, og planen flytter kun det
+øjeblik, den taler, så de aggregeringsvinduer, den producerer, forbliver
+sammenhængende.
+
+Formålet er at sprede en flåde, der ellers ville rapportere i takt. Hundrede
+noder, der startes samtidigt, forbliver i fase for altid og forvandler en jævn
+belastning til en spids én gang i minuttet. Tidspunktet er på serverens ur, og
+hver besked, der bærer en plan, bærer også serverens tid, så noden regner i
+differencer og urforskellen mellem de to ophæver sig selv.
+
+Noden begrænser det tidspunkt, den får: aldrig tidligere end nu, og aldrig længere
+ude end dens egen konfigurerede grænse. En forkert eller fjendtlig server kan
+ikke bringe en flåde til tavshed.
+
+
+### Transport og grænser
+
+Tjenesten tales over gRPC. Alle kald undtagen `RegisterNode` autentificeres med
+nodens egen bearer-legitimation, som sendes i `authorization`-metadata på hvert
+kald. Transporten er TLS i drift, termineret foran tjenesten, så protokollen
+ikke selv forhandler kryptering.
+
+Protokollen fastsætter grænser for indsendelsesfrekvens og payloadstørrelse pr.
+node. En rapport over grænsen afvises med `RESOURCE_EXHAUSTED` og skal forsøges
+igen senere, aldrig hurtigere. Serveren håndhæver endnu ikke grænserne, jf. K9.
+
+En målerapport er atomisk. Fejler en enkelt kanal eller metrik valideringen,
+afvises hele rapporten med `INVALID_ARGUMENT`. Alternativet, delvis accept,
+ville efterlade noden i tvivl om, hvad der nåede frem, og eftersendelsen efter
+et netværksudfald må ikke bygge på den tvivl.
