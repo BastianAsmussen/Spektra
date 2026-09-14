@@ -324,3 +324,153 @@ En målerapport er atomisk. Fejler en enkelt kanal eller metrik valideringen,
 afvises hele rapporten med `INVALID_ARGUMENT`. Alternativet, delvis accept,
 ville efterlade noden i tvivl om, hvad der nåede frem, og eftersendelsen efter
 et netværksudfald må ikke bygge på den tvivl.
+
+
+## Node-agent
+
+Agenten styrer en SDR-modtager og består af en signalkæde og en gRPC-klient.
+Den stiller ind på de kanaler, serveren har tildelt den, udleder kvalitetsmetrikker af rå IQ,
+aggregerer over et vindue og rapporterer sammendraget. Rå samples forlader
+aldrig noden.
+
+
+### Identitet og legitimation
+
+En node registrerer sig én gang. Den identitet, den registrerede sig under, det
+id serveren tildelte, og den legitimation den fik udstedt, skrives til nodens
+tilstandsmappe og genindlæses ved opstart. Uden det ville hver genstart fremstå
+som en ny node, og den rullende baseline, detektoren afhænger af, ville starte
+forfra hver gang.
+
+
+### Den cachede kanalplan
+
+Da noden ikke selv bestemmer, hvad den lytter på, har en node, der aldrig har
+talt med serveren, heller ikke noget at måle. Det er korrekt ved første opstart
+og forkert alle andre gange: målingerne betyder mest, mens en stations
+netforbindelse er nede, og en genstart i det vindue ville ellers efterlade
+modtageren tomgangskørende, indtil nettet kom tilbage.
+
+Planen skrives ved siden af identiteten og genindlæses ved opstart. Den
+bærer sin egen version, så den første vellykkede forespørgsel efter en genstart
+enten bekræfter den eller erstatter den.
+
+
+### Måleløkken
+
+Læsninger fra `SoapySDR` blokerer, og løkken kører derfor på sin egen
+operativsystemtråd frem for på den asynkrone køretid. En blokerende læsning
+inde i en asynkron opgave ville standse alle andre opgaver på den samme
+arbejdertråd, herunder den, der afleverer rapporter. Tråden ejer modtageren og
+signalkæden og afleverer færdige målinger til den asynkrone side over en kanal.
+
+Adgangen til modtageren er abstraheret ét sted. `SoapySDR` opregner både RTL-SDR
+og Airspy gennem den samme grænseflade, så det eneste, der adskiller de to
+familier, er drivernøglen og den samplerate, hardwaren accepterer. Læsninger
+fylder en buffer, kalderen ejer: ved 2,4 MSPS læser agenten i størrelsesordenen
+hundrede blokke i sekundet, og en ny allokering pr. blok ville placere
+allokatoren midt i samplestien.
+
+Der findes desuden en syntetisk signalkilde, som producerer IQ uden hardware.
+Med den kører alle agentens enhedstests uden en modtager, også i
+byggeautomatikken.
+
+
+### Signalbehandlingskæden
+
+Hele kæden er skrevet i projektet, og det gælder også frekvenstransformationen.
+Den er en radix-2 Cooley-Tukey-FFT, som er udviklet som en del af dette arbejde
+og udgivet selvstændigt som `spektra-fft`. Den egne pakke gør den ikke til
+tredjepartskode: den er skilt ud, fordi en transformation er brugbar langt ud
+over dette system og kan vedligeholdes og versioneres for sig. K2 kræver, at
+kæden ikke består af opkald til et færdigt bibliotek.
+
+**Vindue.** Et endeligt udsnit af et kontinuert signal er i sig selv et
+rektangulært vindue over det, og et rektangulært vindues egen transformation
+har første sidelap kun 13 dB nede, så en stærk bærebølge smøres ud over de
+bins, en svag måles i. Derfor bruges et Hann-vindue, som sænker første sidelap
+til 31 dB mod en bredere hovedlap.
+
+**Effektspektrum.** Spektret estimeres med Welchs metode, altså som et
+gennemsnit af mange korte spektre. Metoden bytter frekvensopløsning for et
+stabilt støjgulv, og det er støjgulvet, fire af de fem metrikker aflæses mod.
+Ved 2,4 MSPS leverer modtageren 2,4 millioner komplekse samples i sekundet, og
+de holdes ikke i hukommelsen: segmenter forbruges, efterhånden som driveren
+leverer dem, og kun den løbende effektsum pr. bin overlever. Hukommelsesforbruget
+følger transformationens længde, uanset hvor længe kanalopholdet varer.
+
+**Filtrering og decimering.** Spektrumsstien måler hele spændet på 2,4 MHz,
+men demodulationen skal kun bruge den ene kanal i midten af det. Et FIR-filter
+ned til kanalen efterfulgt af at kassere ni ud af ti samples koster én
+foldning og køber en tifoldig reduktion i alt, hvad der ligger efter.
+
+**FM-demodulation.** Informationen i en FM-bærebølge ligger i, hvor hurtigt
+dens fase drejer. Demodulatoren er én kompleks multiplikation og én
+`atan2` pr. sample: argumentet af `z[n] * konj(z[n-1])` er den fase, der er
+tilbagelagt på én sampleperiode, og divideret med den periode giver det
+frekvens.
+
+**Metrikker.** Signalstyrke, signal-støj-forhold, bærebølgeafvigelse og
+spektrumsbelægning udledes alle af det midlede effektspektrum.
+
+Hele kæden regner i `f32`. Transformationen har dobbelt gennemløb i `f32` i
+forhold til `f64` under NEON på nodens processor, og en 8 bits ADC, der føder
+en transformation på 32.768 punkter, ligger ikke i nærheden af præcisionsgulvet.
+Aggregeringen udvides til `f64`, fordi feltet i protokollen er `double`.
+
+
+### RDS og demodulationsfejlraten
+
+Demodulationsfejlraten er i protokollen defineret som andelen af modtagne
+RDS-blokke, der ikke består deres CRC. Metrikken er derfor en RDS-afkodning,
+uanset om resten af RDS er interessant.
+
+Bloklaget er implementeret: differentiel afkodning, CRC, de fem offsetord,
+gruppesynkronisering og selve fejlraten. Den analoge forende, der producerer
+bitstrømmen, er ikke. Den kræver, at 19 kHz-piloten genfindes i multipleksen og
+tredobles for at låse den undertrykte 57 kHz-underbærebølge, et tilpasset
+filter til bifasesignalet og en timingsløkke ved 1187,5 baud.
+
+Indtil den del er på plads, kalder den kørende agent ikke ind i bloklaget, og
+metrikken optræder ikke blandt de evner, noden oplyser ved registrering.
+Protokollen er evnebaseret, og en node, der udelader en metrik, den ikke kan
+udlede, opfører sig korrekt. En node, der rapporterer et tal, den ikke har
+målt, gør ikke.
+
+
+### Aggregering og offlinejournal
+
+Et kanalophold giver én værdi pr. metrik pr. kanal. Aggregeringsvinduet samler
+dem til et statistisk sammendrag, og kun sammendraget krydser netværket.
+
+Forbindelsen til serveren oprettes først, når der er noget at sende. En agent,
+hvis server er uopnåelig ved opstart, skal stadig komme op, blive ved med at
+sample og mellemlagre. Færdige vinduer skrives til en lokal journal og
+eftersendes, når forbindelsen er tilbage.
+
+Dubletter er ikke agentens problem alene: serverens unikke nøgle på node,
+kanal, metrik og vinduesstart gør en gentaget levering virkningsløs. Det er den
+anden halvdel af garantien i K3.
+
+
+### Nodens eget helbred
+
+En node, der er ved at blive dårligere, skal være synlig som netop det og ikke
+som en station, der pludselig blev tavs. Agenten læser oppetid, belastning og
+processortemperatur fra procfs og sysfs og beregner sin urafvigelse af de
+servertidsstempler, registreringen og hver kvittering bærer. Alle aflæsninger
+er valgfrie: en manglende fil på en udviklingsmaskine rapporterer nul frem for
+at få kørslen til at fejle.
+
+
+### Live-inspektion
+
+En operatør med et panel åbent vil se noden nu og ikke om op til to minutter,
+når vinduet er lukket og leveret. En live-prøve er ét kanalophold, sendt som det
+måles, og serveren gemmer intet af den.
+
+Det koster ingen ekstra signalbehandling, da det kanalophold, der i forvejen
+føder aggregeringen, blot sendes med her. En session ændrer, hvad der forlader
+noden, og intet ved, hvad den måler. Noden ringer selv ud og holder
+forbindelsen åben, så serveren aldrig skal kunne nå noden udefra, og et klik
+fra en operatør lander inden for et sekund.
