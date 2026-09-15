@@ -474,3 +474,346 @@ føder aggregeringen, blot sendes med her. En session ændrer, hvad der forlader
 noden, og intet ved, hvad den måler. Noden ringer selv ud og holder
 forbindelsen åben, så serveren aldrig skal kunne nå noden udefra, og et klik
 fra en operatør lander inden for et sekund.
+
+
+## Backend
+
+
+### Database
+
+Databasen er PostgreSQL. Skemaet er vist i sin helhed i bilag 2 og opbygges af
+15 migrationer, der versioneres sammen med kildekoden og køres af serveren selv
+ved opstart. Tabellerne falder i fire grupper: adgang, flåde, måledata og
+hændelser.
+
+| Gruppe | Tabeller |
+| --- | --- |
+| Adgang | `roles`, `users`, `sessions` |
+| Flåde | `nodes`, `node_credentials`, `channels`, `node_channels` |
+| Måledata | `measurements`, `rollups`, `node_health` |
+| Hændelser | `alarms`, `alarm_events`, `work_orders` |
+
+
+#### Normalisering og relationer
+
+Skemaet er på tredje normalform. Hver kendsgerning står ét sted, og
+afhængigheder går udelukkende gennem primærnøgler. Rollenavne og
+rollebeskrivelser ligger i `roles` frem for som en tekstkolonne på `users`, og
+en kanals frekvens og modulation ligger i `channels` frem for at blive gentaget
+i hver måling.
+
+`nodes.hardware` og `nodes.capabilities` er af typen `JSONB` og ikke
+normaliserede ud i egne tabeller. Felterne beskriver en modtagerkæde, hvis
+sammensætning protokollen har lov til at udvide, og en tabel pr. felt ville
+kræve en migration, hver gang en ny modtagertype kunne oplyse noget mere om sig
+selv. `JSONB` lagres binært og kan indekseres, i modsætning til tekstlagret
+JSON, hvor hver forespørgsel skal gennemlæse strengen igen.
+
+`alarms.explanation` er ligeledes `JSONB`. Den bærer de tal, der udløste netop
+den alarm: baselinens centrum, dens spredning, den observerede værdi og antallet
+af vinduer uden for båndet. K5 kræver, at enhver alarm kan forklares ud fra det
+datagrundlag, der rejste den, og en alarm, der først kan forklares ved at
+genberegne baselinen bagefter, opfylder ikke kravet.
+
+Fem opregnede typer er lagt i databasen som rigtige `ENUM`-typer frem for som
+tekstkolonner: `modulation`, `metric`, `alarm_state`, `work_order_status` og
+`rollup_resolution`. Databasen afviser en ugyldig tilstand, uanset hvilken
+vej den kommer ind, og typerne genfindes direkte i Rust-modellerne.
+
+
+#### Sletning og bevarelse
+
+Fremmednøglerne bærer to forskellige politikker.
+
+Data, der kun giver mening sammen med sin node, ryddes med noden:
+`ON DELETE CASCADE` på målinger, fortættede målinger, legitimation,
+helbredsrapporter og alarmer. Data, der dokumenterer, hvad et menneske gjorde,
+bevares: `alarm_events.changed_by_user_id` og `nodes.owner_id` er
+`ON DELETE SET NULL`, og en bruger deaktiveres med et flag i stedet for at blive
+slettet, fordi alarmhændelser og arbejdsordrer navngiver vedkommende. En
+slettet bruger ville tømme historikken for, hvem der kvitterede for hvad.
+
+
+#### Tidsserielagring
+
+`measurements` er den eneste tabel, der vokser med flåden gange tiden, og den er
+den eneste, der er partitioneret. Tabellen er erklæret
+`PARTITION BY RANGE (window_start)` med én partition pr. døgn og en
+`measurements_default` som opsamling.
+
+Forespørgsler over et tidsinterval kan udelade de partitioner, der ligger uden
+for intervallet, og opbevaringspolitikken kan slette en dags data ved at droppe
+en tabel i stedet for at slette rækker. En `DELETE` efterlader døde rækker, som
+`VACUUM` skal rydde op i, mens et `DROP TABLE` frigiver pladsen med det samme.
+
+Fortættede målinger ligger i `rollups` med tre opløsninger, time, dag og uge,
+og er ikke partitioneret. De er per definition langt færre end de rå rækker, og
+en partitionering af dem ville koste vedligeholdelse uden at give noget igen.
+
+
+#### Indeksering
+
+Hvert indeks i skemaet svarer til en konkret forespørgsel.
+
+`idx_measurements_lookup` er `UNIQUE` på `(node_id, channel_id, metric,
+window_start)`. Det er ikke et ydelsesindeks, men et korrekthedsindeks: en node,
+der har mellemlagret data under et netværksudfald og eftersender dem, kan
+komme til at sende et vindue, den allerede har leveret. Nøglen gør dataindtaget
+idempotent, og det er den halvdel af K3, der ellers ville være umulig at
+garantere.
+
+`idx_measurements_recent` på `(window_start)` findes, fordi detektoren
+gennemløber den seneste time på tværs af hele flåden frem for én serie ad
+gangen. `idx_measurements_lookup` leder med `node_id` og kan ikke betjene den
+forespørgsel. Partitionsudeladelsen indsnævrer til et døgn, og dette indeks
+indsnævrer til timen.
+
+`idx_rollups_bucket` på `(resolution, bucket_start)` findes af samme grund:
+detektoren bygger hele flådens baseline i ét gennemløb og beder om et fast sæt
+starttidspunkter for alle noder, og det kan `idx_rollups_lookup` med `node_id`
+forrest ikke betjene.
+
+`idx_alarms_open` er et partielt indeks på `(node_id, channel_id, metric)` med
+betingelsen `WHERE state <> 'closed'`. Hver eneste læsning af tabellen beder om
+de alarmer, der ikke er lukkede, og et btree-indeks har ingen strategi for
+`<>`, så et almindeligt indeks på kolonnen aldrig ville blive valgt. Det
+partielle indeks indeholder desuden kun de rækker, forespørgslen kan returnere,
+så det forbliver lille, uanset hvor mange lukkede alarmer der er akkumuleret.
+
+
+### API
+
+Serveren eksponerer gRPC til noderne og HTTP til webklienten.
+
+
+#### Dataindtag over gRPC
+
+Tjenesten `NodeIngest` bærer de seks kald, protokollen definerer. Valideringen
+er delt i to trin. `validate.rs` kontrollerer det, der kan afgøres ud fra
+beskeden alene: at protokolversionen passer, at vinduet
+slutter efter det begynder, at en kanal kun optræder én gang, og at hver metrik
+ligger inden for et fysisk meningsfuldt interval. Intervallerne er defineret i
+protokolpakken og ikke i serveren, så en tredjeparts node kan læse de samme
+grænser af skemaet.
+
+`persist.rs` udfører derefter skrivningerne. En rapport skrives i én
+transaktion, og dublet-nøglen på `measurements` gør, at en gentagen levering
+hverken skriver noget eller fejler.
+
+Nodens sidst sete tidspunkt opdateres betinget, og betingelsen er ikke en
+optimering af skrivningen, men af låsen. En ubetinget opdatering tager en
+rækkelås på noden og holder den til commit, så to rapporter fra samme node ikke
+kan committe samtidigt: den anden venter på den førstes skrivning til
+transaktionsloggen. Det rammer hårdest en node på vej tilbage fra et udfald,
+fordi den eftersender mange rapporter i træk. En række, der ikke matcher
+betingelsen, låses aldrig, og de gentagne skrivninger inden for vinduet koster
+et opslag i ét indeks og intet andet.
+
+Dataindtaget accepterer komprimering med zstd og med gzip for klienter, der
+ikke taler zstd, og svarer selv komprimeret med zstd.
+
+
+#### REST og webklient
+
+Den anden grænseflade betjener både et JSON-API og webklientens
+HTML-fragmenter fra de samme håndteringsfunktioner.
+
+| Modul | Primært formål | Eksempler på stier |
+| --- | --- | --- |
+| `auth` | Login og session | `/login`, `/logout` |
+| `nodes` | Flådens noder og deres tilstand | `/api/nodes`, `/fragments/nodes/{id}` |
+| `series` | Tidsserier pr. node, kanal og metrik | `/api/series/{node}/{channel}/{metric}` |
+| `alarms` | Alarmer og deres livscyklus | `/api/alarms`, `/api/alarms/{id}/transition` |
+| `work_orders` | Udkald og efterprøvning | `/api/work-orders`, `/api/alarms/{id}/dispatch` |
+| `admin` | Brugere og nodeadministration | `/api/users`, `/api/nodes/{id}/suspension` |
+| `ops` | Systemets egen driftstilstand | `/api/ops/status`, `/api/ops/throughput` |
+| `ws` | Realtidshændelser | `/api/ws` |
+| `pages` | Sider og sidefragmenter | `/`, `/nodes/{id}`, `/fragments/fleet` |
+
+Hvert modul eksponerer sin egen `routes()`, som samles i `main`. API'et er
+desuden dokumenteret maskinlæsbart og kan afprøves direkte gennem Swagger-UI'et
+på den publicerede server.
+
+
+#### Fejlhåndtering
+
+Der er én fejltype, `ApiError`, og én implementering af, hvordan den bliver til
+et HTTP-svar. Databasefejl konverteres ind i den, så `?` virker i
+håndteringsfunktionerne, og afbildningen til statuskoder er fast:
+
+| Situation | Statuskode |
+| --- | --- |
+| Manglende eller ugyldig legitimation | 401 |
+| Godkendt, men uden rettighed til handlingen | 403 |
+| Ukendt ressource | 404 |
+| Overtrædelse af en unik nøgle | 409 |
+| Overtrædelse af `NOT NULL` eller `CHECK` | 422 |
+| Uventet fejl | 500 |
+
+En uventet fejl logges med sin egentlige årsag på serveren og besvares udadtil
+med en generisk tekst. Klienten skal vide, at kaldet mislykkedes, ikke hvilken
+tabel der er tale om.
+
+
+#### Realtid
+
+WebSocket-forbindelsen afgør ved oprettelsen, hvilke noder brugeren må høre om,
+og filtrerer derefter i hukommelsen. En forbindelse, der kommer bagud, lukkes
+aldrig; de beskeder, den er gået glip af, logges og springes over.
+
+Da sessionen kun kontrolleres ved oprettelsen, er en åben socket det eneste i
+serveren, der kan blive ved med at svare i timevis uden at blive kontrolleret
+igen. Forbindelsen kontrollerer selv sessionen med jævne mellemrum og
+lukkes, når den er udløbet.
+
+
+### Baggrundsarbejde
+
+Serveren kører to baggrundsløkker på hver sin timer. Vedligeholdelsen kører en
+gang i timen og flytter mange rækker; detektionen kører hvert minut og læser få.
+De er adskilte opgaver, så en partitionsflytning ikke kan forsinke en alarm, og
+hver af dem låner kun en forbindelse fra puljen, mens den arbejder, så ingen af
+dem tager forbindelser fra dataindtaget.
+
+
+#### Partitionsvedligeholdelse
+
+Migrationen opretter kun standardpartitionen. Jobbet opretter én partition pr.
+døgn i forvejen og dropper dem, der ligger uden for opbevaringshorisonten.
+
+PostgreSQL nægter at oprette en partition for et interval, standardpartitionen
+allerede indeholder rækker i, og en `measurements`-tabel uden standardpartition
+afviser skrivninger. Jobbet frakobler derfor standardpartitionen, flytter de
+rækker, der hører til den nye dag, og tilkobler den igen, alt sammen i én
+transaktion. Dataindtaget kører
+imens, og en halvt gennemført ændring ville betyde afviste målinger.
+
+Partitionsnavnet udledes udelukkende af datoen, så ingen streng fra en klient
+når frem til den DDL, jobbet kører.
+
+
+#### Fortætning
+
+En node rapporterer ét vindue i minuttet pr. kanal og metrik. Med fem metrikker
+og to kanaler er det 14.400 rækker pr. node pr. døgn, og de grafer, operatøren
+faktisk kigger på, spænder over måneder. Fortætningen holder de lange visninger
+billige uden at indføre en database mere i diagrammet.
+
+Hver opløsning beregnes ud fra de rå rækker og ikke ud fra opløsningen under
+den, så længe de rå rækker er inden for deres horisont. Et gennemsnit af
+gennemsnit er kun lig gennemsnittet, når grupperne er lige store, og det er
+vinduer ikke: en node, der har været nede i en halv time, bidrager med færre
+samples til den time end til den næste.
+
+| Størrelse | Overlever | Hvordan |
+| --- | --- | --- |
+| `min`, `max` | Eksakt | Yderpunkterne af yderpunkterne |
+| `sample_count` | Eksakt | Summen |
+| `mean` | Eksakt | Vægtet med `sample_count` |
+| `stddev` | Eksakt | Gennem identiteten for puljet varians |
+| `median` | Tilnærmet | Medianen af vinduernes medianer |
+| `p95` | Nej | Kan ikke gendannes af sammendrag |
+
+`p95` er udeladt af `rollups` frem for at stå der som en kolonne, der indeholder
+et tal, data ikke understøtter. En percentil af de rå samples kan ikke
+rekonstrueres af statistiske sammendrag, og en tilnærmelse, der ikke er markeret
+som en tilnærmelse, er værre end en manglende kolonne.
+
+
+#### Afvigelsesdetektion
+
+Detektoren sammenligner de seneste vinduer med, hvad noden plejer at måle, og
+gør det pr. time på døgnet frem for mod et fladt døgngennemsnit. Både
+radiobølgeudbredelse og lokal støj følger en daglig cyklus, og et fladt
+gennemsnit over 24 timer ville rejse alarm hver nat.
+
+Baselinen bygges over 28 døgn. Centrum er medianen af timegruppernes
+gennemsnit. Medianen er robust over for et enkeltstående udfald eller en enkelt
+forstyrret eftermiddag, der ellers ville trække et gennemsnit skævt. Spredningen
+lægger to bidrag sammen i kvadratur, fordi de er uafhængige: variationen mellem
+døgnene for den samme time, målt som median absolute deviation og skaleret med
+faktoren 1,4826 til en standardafvigelsesækvivalent, og den typiske spredning
+inden for en enkelt time.
+
+Alarmen rejses, når tre på hinanden følgende vinduer ligger uden for båndet på
+fire robuste standardafvigelser, og alle tre ligger til samme side. Kravet om
+samme side skiller en reel forskydning fra en støjende serie, der rammer begge
+sider.
+
+En node skal have mindst syv timegrupper, før den overhovedet kan udløse en
+alarm, så en netop installeret node ikke alarmerer i sine første døgn. Og
+spredningen har en nedre grænse, fordi en kanal, der har stået på præcis den
+samme værdi i 28 døgn, har en median absolute deviation på nul, hvorefter det
+næste vindue, der overhovedet afviger, ville rejse alarm.
+
+Lukning sker aldrig automatisk. En alarm forlader kun tilstanden `open` gennem
+livscyklus-API'et, hvor et menneske sætter tilstanden og angiver en begrundelse.
+
+
+### Drift og udrulning
+
+
+#### Byggeautomatik
+
+Et push til projektets repository udløser en testkørsel, der kompilerer hele
+workspace'et, kører den statiske analyse med de samme regler som lokalt og
+afvikler den fulde testsuite mod en PostgreSQL-instans, arbejdsgangen selv
+starter.
+
+Udrulningen er en selvstændig arbejdsgang, der udløses af, at testkørslen er
+færdig, og som kun udfører noget, hvis dens konklusion var `success`. Et push,
+der fejler testene, udrulles aldrig. Reglerne for den statiske analyse ligger i
+workspace'ets manifest og ikke i en liste af argumenter i arbejdsgangen, så
+den samme regel gælder på udviklingsmaskinen og i byggeautomatikken.
+
+Ud over den almindelige testkørsel kan det hele køres lokalt med ét kald,
+`nix flake check`, som bygger begge pakker, kører den statiske analyse og
+formateringen og afvikler testsuiten mod en kortlivet database, som kørslen selv
+starter. Den kræver hverken en kørende databasetjeneste eller netadgang.
+
+
+#### Værtskonfiguration
+
+Både serveren og noden kører NixOS og konfigureres fra dette repository. Værten,
+tjenesten, diskopsætningen og applikationen er beskrevet i den samme kilde, der
+bygges og testes, så en udrulning kan ikke afvige fra det, der blev afprøvet.
+
+Det adskiller sig fra de to gængse stakke til Linux-drift.
+Docker Compose, der isolerer applikation og database i containere, efterlader
+værtsoperativsystemet uden for den kilde, der testes: containeren kan være
+korrekt, mens disken, kerneparametre og systemtjenester drives i hånden. Ansible
+kan lukke det hul med playbooks, men playbooks muterer en eksisterende maskine
+trin for trin og forudsætter et OS; to ens kørsler kan stadig ende forskelligt, hvis
+noget uden for playbooken har rørt værten. NixOS erklærer hele systemet som ét
+udtryk. Udrulningen er `nixos-rebuild switch` mod en flake-reference,
+generationen skiftes atomart, og den forrige ligger klar til rollback.
+
+Caddy står foran applikationen, terminerer TLS og henter certifikater
+automatisk. Applikationens to porte, HTTP og gRPC, lytter kun på loopback, når
+der er sat et domænenavn, så trafik udefra altid passerer gennem den
+terminerende proxy.
+
+Databasens filsystem er sat op uden kopiering ved skrivning. Kopiering ved
+skrivning under en database fragmenterer datafilerne og lægger endnu en
+skriveforstærkning oven på den, transaktionsloggen allerede har.
+
+
+#### Overvågning af egen drift
+
+Serveren tæller sin egen aktivitet i hukommelsen: gennemløb i dataindtaget,
+svartider, fejlrater og tidspunktet for detektorens seneste gennemførte
+gennemløb. Tællerne er driftsdata og ikke historik, og de nulstilles med
+processen.
+
+Går der et kvarter, uden at dataindtaget accepterer noget fra nogen, kalder
+serveren sig selv degraderet; en node rapporterer én gang i minuttet, så et
+kvarter uden en eneste accepteret rapport fra hele flåden er ikke en stille
+flåde. Går der tre minutter, uden at detektoren
+gennemfører et gennemløb, gælder det samme; det er tre gange dens eget
+interval, hvor ét oversprunget interval er en langsom forespørgsel og tre er en
+opgave, der har sat sig fast.
+
+En standsning af dataindtaget skrives ikke til `alarms`. Hver række i den
+tabel hører til en node, og en server, der er holdt op med at tage imod
+skrivninger, er ikke én nodes problem. Tilstanden vises i driftsvisningen i
+stedet.
