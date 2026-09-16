@@ -348,3 +348,246 @@ Detektoren bygger sin baseline over et rullende vindue på 28 døgn, og en sende
 der tændes samme dag, som forringelsen skal vises, har ingen baseline at afvige
 fra. Enten kører senderen gennem hele vinduet i forvejen, eller også konfigureres
 den node med et kortere vindue.
+
+
+## Rust
+
+Rust er et systemprogrammeringssprog, der kompileres til maskinkode uden en
+mellemliggende virtuel maskine. Det adskiller sig fra C og C++ ved, at
+hukommelsessikkerheden kontrolleres af compileren i stedet for af
+programmøren, og fra Java og C# ved, at den kontrol sker ved kompilering i
+stedet for af en garbage collector under kørslen. Ejerskabsmodellen afgør ved
+kompilering, hvornår en værdi frigives, og der er ingen oprydningsfase, hvis
+tidspunkt køretiden bestemmer.
+
+Både serveren og node-agenten er skrevet i Rust, og protokollen ligger som en
+tredje pakke, begge kompilerer imod. Feltnavne, opregnede typer og
+værdiintervaller findes ét sted, og en ændring i skemaet bryder kompileringen
+på begge sider i stedet for at dukke op som mærkelige data i driften.
+
+Fraværet af en garbage collector afgør valget på noden. Signalkæden regner inde
+i en måleløkke, som læser fra modtageren i faste blokke. En oprydningsfase, hvis
+tidspunkt bestemmes af køretiden og ikke af koden, lander midt i den løkke og
+taber samples. Det sekundære argument er fejlhåndteringen: en operation, der kan
+fejle, returnerer `Result`, og en ubehandlet fejl bliver en kompileringsfejl og
+ikke en hændelse i drift.
+
+C# med ASP.NET Core blev fravalgt. Økosystemet er modent, web-delen ville have
+været hurtigere at bygge, og meget af det, der her er skrevet i hånden, findes
+færdigt i .NET. CLR'en rydder dog op med en garbage collector, og nodens samplesti
+tåler ikke dens uforudsigelige pauser. Exceptions kan
+kastes fra ethvert punkt og propagere op gennem kaldstakken uden at optræde i en
+signatur, så en fejlsti bliver usynlig for den, der læser koden. Og .NET på
+noden ville betyde en køretid ved siden af signalkæden på en maskine, der i
+forvejen er dimensioneret til at have hovedrum og ikke rigeligt.
+
+Prisen for Rust betales i kompileringstid. Fuld LTO og én kodegenereringsenhed
+gør et koldt release-build af hele workspace'et langsommere, og indstillingerne
+er beholdt, fordi de gør node-agentens binære fil ~40% mindre.
+
+
+## axum og tokio
+
+axum er et asynkront web-framework til Rust. Det er bygget på tokio, sprogets
+mest udbredte asynkrone køretid, og på tower, der sammensætter netværkstjenester
+af genbrugelige mellemled. Et endepunkt er en almindelig funktion, der tager sine
+parametre som udtrækkere og returnerer en typefast respons, så et svar i forkert
+format er en kompileringsfejl.
+
+axum bærer REST-API'et, HTML-siderne og WebSocket-forbindelsen. Serveren hviler
+på én fejltype med én `IntoResponse`, en `AuthUser`-udtrækker, en
+broadcast-kanal til åbne sockets og integrationstest, der driver routeren
+direkte uden at starte en HTTP-server.
+
+Det tungeste argument ligger i gRPC-delen. `tonic` router selv sine kald gennem
+`axum::Router`, så dataindtaget og webklienten deler køretid, HTTP-lag og
+tower-mellemled, og REST-siden lægger ingen ekstra HTTP-stak ind i den binære
+fil.
+
+Actix-Web blev fravalgt, fordi dens aktørmodel lægger et ekstra lag mellem
+forespørgsel og håndtering, som dette projekt ikke har brug for. Rocket blev
+fravalgt, fordi dens afhængighed af ustabile sprogfunktioner historisk har gjort
+versionsopgraderinger dyrere end nødvendigt for en tjeneste af denne størrelse.
+
+
+## tonic og prost
+
+Protocol Buffers er et binært dataformat, hvor beskedernes felter og typer
+beskrives i en skemafil, og gRPC er den fjernkaldsprotokol, der sender dem over
+HTTP/2. Skemaet er kontrakten: en compiler læser `.proto`-filen og udskriver
+både klienten og tjenesten i det sprog, kalderen arbejder i.
+
+Dataindtaget tales over gRPC. `tonic` er tjenesten, `prost` er
+kodegenereringen. Protokolpakken er en selvstændig crate, så server, node-agent
+og en tredjepart genererer deres kode af det samme skema.
+
+Valget følger direkte af K1. Kravet er et maskinlæsbart skema, der kan
+offentliggøres uafhængigt af kildekoden, med entydig afvisning af ukendte
+versioner og mulighed for at betjene flere versioner sideløbende. Et
+protobuf-skema med versionsfelt i pakkenavnet opfylder det uden en
+hjemmelavet kontraktsprotokol oven på JSON.
+
+JSON over REST blev fravalgt til nodens dataindtag. Det kunne have samlet begge
+grænseflader på ét transportlag, men det ville have svækket skemaet som kontrakt: en
+JSON-kontrakt er dokumentation, ikke en generérbar klient, og
+versionsforhandling bliver et konventionsspørgsmål i stedet for et
+pakkespørgsmål.
+
+
+## diesel og PostgreSQL
+
+Databasen er PostgreSQL. Adgangen fra Rust går gennem diesel over en
+forbindelsespulje, og migrationerne versioneres sammen med kildekoden og køres
+af serveren ved opstart.
+
+Databasebibliotekerne i Rust falder i tre grupper. Den første sender rå
+SQL-strenge, hvor en syntaksfejl først viser sig ved kørsel. Den anden bygger
+forespørgslen med en forespørgselsbygger uden fuld typekontrol mod skemaet. Den tredje
+verificerer forespørgslen ved kompilering, og der ligger både diesel og SQLx.
+
+De to verificerer forskelligt. SQLx validerer SQL-strenge gennem makroer og
+kræver derfor adgang til en levende database under kompileringen. Diesel går den
+modsatte vej: forespørgslen skrives som Rust-typer, og skemaet er en genereret
+Rust-fil, hvorefter compileren afviser et kolonnenavn, der ikke findes, og en
+type, der ikke passer. Diesel blev valgt, fordi `nix flake check` bygger og
+tester hele workspace'et uden netadgang og selv starter sin database undervejs.
+SQLx' krav om en database allerede ved kompilering passer ikke ind i den kørsel.
+
+Tidsserielagringen er almindelig PostgreSQL med egne partitioner og eget
+fortætningsjob. TimescaleDB blev fravalgt. K4 kræver en aldersbestemt
+opbevaringspolitik og en fortætning af rå målinger til grovere
+opløsning, og udvidelsen ville flytte det krav ud i tredjepartskode. Dertil er
+udvidelsen en binær komponent, der skal være installeret på værten i en version,
+der passer til serverens: endnu en version at holde styr på i en opsætning, der
+ellers er låst af `flake.lock`. ClickHouse blev fravalgt, fordi måledata så ville
+ligge i et andet system end noderne og kanalerne, de peger på, og uden
+fremmednøglen mellem `measurements` og `nodes` kan en måling blive forældreløs.
+
+
+## spektra-fft
+
+Frekvenstransformationen under Welch-estimeringen er en radix-2
+Cooley-Tukey-FFT, skrevet som en del af dette arbejde og udgivet som den
+selvstændige pakke `spektra-fft`. Kildekoden ligger på
+<https://github.com/BastianAsmussen/spektra-fft>.
+
+K2 kræver, at signalkæden implementeres i projektet, og
+frekvenstransformationen er kædens første trin. `rustfft` er det modne valg og er
+hurtigere, men et opkald til den ville have flyttet det trin ud af kæden og ind
+i en afhængighed.
+
+Forskellen i hastighed ligger i to ting, `spektra-fft` ikke har: håndskrevne
+SIMD-kerner og andre radixer end 2. Begge dele blev skåret af tidsplanen, og
+ingen af dem er nødvendige ved den skala, systemet kører på.
+Effektspektrumsestimeringen står for knap en tredjedel af kædens regnetid, og
+noden har hovedrum til den over fire kanaler.
+
+Udskillelsen i en separat crate ændrer intet ved koden. En transformation er
+brugbar langt uden for dette system, og som selvstændig pakke kan den
+vedligeholdes for sig.
+
+
+## askama, HTMX og Tailwind
+
+askama er en skabelonmotor, der kompilerer HTML-skabelonerne sammen med resten
+af serveren, så en skabelon, der bruger et felt, som ikke findes, giver en
+kompileringsfejl og ikke et tomt felt i brugerfladen. HTMX er et
+JavaScript-bibliotek, der lader en HTML-attribut sende en HTTP-anmodning og
+indsætte svaret i et navngivet element. Tailwind er et CSS-framework, hvor stilen
+skrives som småklasser direkte i markup'en, og hvor kun de klasser, projektet
+faktisk bruger, ender i den byggede fil.
+
+Webklienten er serverrenderet: serveren sender HTML-fragmenter, og
+klienten indsætter dem uden at genindlæse siden.
+
+Valget går imod en klienttung enkelt-sides applikation. En operativ
+overvågningsflade har brug for, at en alarm kan skubbes ind i en åben side, og
+at adressen på en åben node kan sendes til en kollega. Det løses med
+serverrenderede fragmenter og rigtige ruter, uden at vedligeholde en separat
+JavaScript-applikation.
+
+SolidJS og React blev fravalgt, fordi de flytter gengivelsen til browseren og
+introducerer et build-trin, projektet ikke ellers har. Leptos og Yew blev
+prøvet i små eksperimenter og fravalgt, fordi Tailwind-integrationen og det
+øvrige økosystem omkring serverrenderede fragmenter var svagere end HTMX til den
+type flade.
+
+
+## uPlot og Leaflet
+
+uPlot er et diagrambibliotek, der tegner på et `canvas`-element i stedet for at
+bygge DOM-noder, og Leaflet er et kortbibliotek, der lægger markører og
+felter oven på fliser fra en kortudbyder. Begge er lagt ind i projektet som
+filer og hentes ikke fra et indholdsleveringsnetværk, så webklientens kode ikke
+afhænger af, at en tredjeparts server svarer. Kun kortfliserne hentes udefra.
+
+uPlot blev valgt for `canvas`-tegningen. En tidsserie over en måned er tusindvis
+af punkter, og et bibliotek, der giver hvert punkt sin egen DOM-node, gør
+browseren til flaskehalsen længe før serveren bliver det. Chart.js blev fravalgt,
+fordi det bliver tungt på lange serier, og D3 blev fravalgt, fordi det er et
+generelt visualiseringsværktøj, hvor et tidsseriediagram skal bygges af
+primitiver og ikke bare konfigureres.
+
+OpenLayers var et reelt alternativ til Leaflet med projektioner, vektorformater
+og lagstyring, dog er det et fuldt GIS-bibliotek, og et kort med én markør pr.
+node bruger ingen af de dele. MapLibre GL tegner vektorfliser med WebGL og
+klarer langt flere punkter, dog kræver det både WebGL i browseren og en
+vektorflisekilde med tilhørende stilark, hvor Leaflet nøjes med almindelige
+kortfliser fra OpenStreetMap.
+
+
+## ntfy
+
+ntfy er en notifikationstjeneste, hvor et emne er en URL, og hvor en besked
+sendes med en almindelig HTTP-POST til den. En modtager abonnerer på emnet fra
+en browser eller fra ntfy's egen app, og der kræves hverken konto eller
+registrering hos en platformsudbyder. Serveren er én binær fil, som kan hostes
+sammen med resten.
+
+Serveren sender nye alarmer gennem den, når et emne er konfigureret. E-mail blev fravalgt som primær
+kanal, fordi leveringstid og spamfiltrering gør den uegnet til en alarm, der
+skal ses inden for sekunder. Webhooks blev fravalgt som eneste kanal, fordi de
+forudsætter, at modtageren allerede har et system til at tage imod dem; en
+tekniker med en telefon har det ikke. Push gennem Firebase Cloud Messaging
+ville have krævet en mobilapplikation, og systemet har ikke nogen.
+
+
+## NixOS og Caddy
+
+NixOS er en Linux-distribution, hvor maskinens tilstand er deklareret frem for
+konfigureret. Systemet beskrives som moduler, hvert med sit ansvarsområde, og de
+evalueres til ét samlet udtryk, som kerne, tjenester, brugere, diske og
+applikationsbinærer alle udledes af. En opdatering bygger den nye generation ved
+siden af den kørende og skifter til den i ét trin. Caddy er en webserver, der
+henter og fornyer TLS-certifikater af sig selv, når den kender værtens
+domænenavn.
+
+Både den centrale server og noden kører NixOS og konfigureres fra det samme
+repository som applikationen. Caddy står foran serveren og terminerer TLS.
+
+Docker Compose bag en reverse proxy på en manuelt konfigureret VPS blev
+fravalgt: et reproducerbart, isoleret miljø for applikation og database, hvor
+containeren bærer køretid og afhængigheder, mens værtsoperativsystemet ligger
+udenfor. Ansible blev ligeledes fravalgt: playbooks, der muterer en eksisterende
+maskine til den ønskede tilstand. Begge adskiller værtskonfigurationen fra den
+kilde, der bygges og testes.
+
+Her er værten, tjenesten, diskopsætningen og applikationen deklareret i samme
+repository. `nix flake check` bygger og tester uden netadgang, og udrulningen er
+`nixos-rebuild switch` mod en flake-reference, betinget af at testkørslen er
+grøn. En generation skiftes atomart; der er ingen playbook, der kan gå i stå
+halvvejs, og ingen container, der kører korrekt oven på et OS, hvis
+konfiguration har flyttet sig.
+
+Et Docker-image bygges oven på et foranderligt basisimage; en flake er låst af
+`flake.lock`. En compose-fil beskriver containere, ikke disken under databasen;
+her er filsystemet uden kopiering ved skrivning erklæret sammen med tjenesten.
+Og testene kører gennem flaken selv: `nix flake check` starter sin egen
+PostgreSQL uden netadgang, og der er intet ekstra script ved siden af.
+
+Ansible tabte på en garanti, playbooks ikke kan give. En playbook forudsætter et
+OS og nærmer sig den ønskede tilstand trin for trin; to kørsler med samme
+playbook kan stadig lande forskelligt, hvis noget uden for playbooken har rørt
+maskinen. NixOS erklærer hele systemet som ét udtryk. Efter `nixos-rebuild
+switch` kører den generation, flaken peger på, inklusive kerne, tjenester og
+applikationsbinær, og den forrige generation ligger klar til rollback.

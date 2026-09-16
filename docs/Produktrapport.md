@@ -817,3 +817,125 @@ En standsning af dataindtaget skrives ikke til `alarms`. Hver række i den
 tabel hører til en node, og en server, der er holdt op med at tage imod
 skrivninger, er ikke én nodes problem. Tilstanden vises i driftsvisningen i
 stedet.
+
+
+## Sikkerhed
+
+
+### Transport
+
+Begge grænseflader er krypteret i drift. Caddy terminerer TLS foran
+applikationen og henter og fornyer certifikater automatisk. Når der er
+konfigureret et domænenavn, binder både HTTP-tjenesten og gRPC-tjenesten sig til
+loopback, så de ikke kan nås uden om den terminerende proxy.
+
+
+### Nodens identitet
+
+En node autentificerer sig med sin egen bearer-legitimation, udstedt ved
+registreringen og sendt i `authorization`-metadata på hvert eneste kald undtagen
+registreringen selv.
+
+Legitimationen slås op, hver gang en node skriver, og opslaget giver det
+node-id, skrivningen henføres til. En node kan derfor ikke indsende på en anden
+nodes vegne: nøglen bestemmer, hvem afsenderen er, og noden får ikke lov til at
+oplyse det selv.
+
+`node_credentials` har ikke en unik nøgle på `node_id`, men et partielt unikt
+indeks med betingelsen `WHERE revoked_at IS NULL`. Der kan være præcis én
+levende legitimation pr. node, mens de tilbagekaldte bliver stående. En rotation
+tilbagekalder den gamle række i stedet for at overskrive den, så sporet af,
+hvornår en nøgle blev skiftet, bevares.
+
+En suspenderet node afvises ved indsendelse med `PERMISSION_DENIED`, og
+kontrollen sker i samme opslag som autentificeringen, før noget som helst
+skrives.
+
+Protokollen fastsætter desuden, at serveren begrænser indsendelsesfrekvens og
+payloadstørrelse pr. node, og at en rapport over grænsen afvises med
+`RESOURCE_EXHAUSTED`. Kontrakten er beskrevet i skemaet; håndhævelsen på
+serversiden hører til K9 og udestår.
+
+
+### Brugeradgang
+
+Brugere autentificeres med adgangskode, som aldrig lagres i klartekst, og en
+session identificeres af en tilfældig token med et udløbstidspunkt, der
+kontrolleres ved hvert kald.
+
+Rollerne har adskilte rettigheder:
+
+| Rolle | Adgang |
+| --- | --- |
+| `administrator` | Fuld systemoversigt, administrerer brugere og noder |
+| `operator` | Overvåger flåden og styrer alarmernes livscyklus |
+| `technician` | Ser kun de noder, vedkommende er sendt ud til |
+| `reader` | Læseadgang til målinger og alarmer |
+
+Reglen for, hvilke noder en bruger må høre om, er implementeret ét sted og
+deles mellem REST-API'et og WebSocket-forbindelsen. En tekniker, der ikke kan
+se en node over den ene grænseflade, må heller ikke kunne læse dens alarmer over
+den anden, og to kopier af den regel ville før eller siden komme til at være
+uenige.
+
+Reglen slås op én gang pr. anmodning eller pr. forbindelse og anvendes derefter
+i hukommelsen. Derfor kontrollerer den åbne forbindelse selv sessionen med
+jævne mellemrum; ellers ville en tilbagetrukket adgang først få virkning, når
+brugeren genindlæste siden.
+
+Brugere slettes ikke, men deaktiveres med et flag. Alarmhændelser og
+arbejdsordrer navngiver den, der handlede, og en sletning ville tømme
+historikken for, hvem der kvitterede for hvad.
+
+
+## Frontend
+
+Webklienten er serverrenderet. Serveren sender HTML-fragmenter, som klienten
+indsætter i den side, der allerede er åben, frem for at sende JSON, som et
+klientside-framework skal oversætte til HTML igen. Skabelonerne kompileres sammen
+med serveren, så et felt, der ikke findes, er en kompileringsfejl og ikke en
+tom plads i brugerfladen.
+
+Leaflet, uPlot og HTMX er lagt ind i projektet som filer og hentes ikke fra et
+indholdsleveringsnetværk, så webklientens kode ikke afhænger af, at en
+tredjeparts server svarer. Kun kortfliserne hentes udefra, fra OpenStreetMap.
+
+
+### Sider og fragmenter
+
+Hovedvisningen er én side, oversigten, som også kan vises med én node åben. `/nodes/7` er en rigtig rute og ikke en fragmentidentifikator, så adressen
+på det, nogen kigger på, kan sendes til en kollega og ankomme med panelet
+allerede renderet frem for udfyldt, når klientens scripts har kørt.
+
+
+### Visningerne
+
+Kortet viser flådens noder med deres aktuelle status. Tidsserierne tegnes pr.
+node, kanal og metrik med valgbart interval. Vis alle målinger tilføjer de
+øvrige metrikker, herunder båndudnyttelse. Spektrumvisningen, sammenligningen af
+flere noder og tidslinjen med alarmer og udkald er ikke nået.
+
+Diagrammerne tegnes af det samme JSON, en tredjepart ville integrere mod. Der er
+ikke et særligt format til brugerfladen og et andet til integration.
+Tidsstempler sendes som Unix-sekunder og ikke som formateret tekst: et tidspunkt
+uden zoneangivelse inviterer browseren til at læse det som lokal tid og forskyde
+hvert punkt med en time to gange om året.
+
+
+### Store tidsintervaller
+
+Rå målevinduer overlever fjorten dage, hvorefter opbevaringspolitikken tager
+dem. En graf, der er bredere end det, skal derfor læse fortættede data, eller
+den tegner en kant, hvor data blev ryddet.
+
+Opløsningen vælges ud fra det viste interval og forespørges ikke af kalderen. En
+kalder, der bad om rå rækker over et år, ville bede om en forespørgsel, ingen
+har lyst til at besvare, og valget hører til på serversiden. Visningerne
+opfylder K8 ved store intervaller, uden at brugeren vælger opløsningen.
+
+
+### Realtid
+
+Nye alarmer og ændrede nodetilstande skubbes over WebSocket-forbindelsen og
+indsættes i den åbne side. Der er ingen periodisk genindlæsning, og en operatør,
+der har oversigten fremme, ser en alarm, i samme øjeblik den rejses.
