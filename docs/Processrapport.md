@@ -33,6 +33,20 @@ Kildekoden til protokol, server og node-agent findes på
 Case beskrivelse og problemformulering optræder ordret i begge rapporter.
 
 
+# Indledning
+
+Projektet havde nitten arbejdsdage. Inden for dem skulle der bygges en
+signalbehandlingskæde, der kan køre på en enkeltkortscomputer, og en protokol,
+som to uafhængigt skrevne implementationer kan blive enige om. Oven i det kom en
+server, der lagrer og analyserer tidsserier fra en hel flåde, og en webklient,
+som en operatør kan overvåge flåden fra.
+
+Systemet blev bygget af én person på de nitten dage, så hvert fravalg var en
+prioritering: hver time brugt på DAB+, på en native mobilklient eller på
+kalibrering mod et absolut referenceniveau var en time taget fra signalkæden,
+detektoren eller webklienten.
+
+
 # Case beskrivelse
 
 Radio er kritisk infrastruktur og bruges blandt andet til beredskabsinformation,
@@ -591,3 +605,126 @@ playbook kan stadig lande forskelligt, hvis noget uden for playbooken har rørt
 maskinen. NixOS erklærer hele systemet som ét udtryk. Efter `nixos-rebuild
 switch` kører den generation, flaken peger på, inklusive kerne, tjenester og
 applikationsbinær, og den forrige generation ligger klar til rollback.
+
+
+# Væsentlige elementer fra produktrapporten
+
+**Overordnet arkitektur.** Systemet har fire komponenter og to grænseflader,
+vist i produktrapportens bilag 1. Mellem node og server tales gRPC over
+protobuf, hvor skemaet er kontrakten, og hvor en fremmed implementation kan
+generere sin egen klient af den. Mellem server og webklient tales HTTP med
+HTML-svar plus en WebSocket til hændelser. En node og en browser har ikke samme
+behov, og ét fælles format ville have tvunget det ene til at bære det andets
+begrænsninger. Den beslutning ligger bag både tonic og axum.
+
+**Database.** `measurements` er den eneste tabel, der vokser med flåden gange
+tiden, og den er erklæret `PARTITION BY RANGE (window_start)` med én partition
+pr. døgn. Opbevaringspolitikken sletter et døgn ved at droppe en tabel, og
+pladsen frigives med det samme, hvor en `DELETE` efterlader døde rækker til
+`VACUUM`. Fortætningen ruller de rå vinduer op i time-, dags- og ugeopløsning,
+og rå rækker overlever 14 døgn. De to job gjorde TimescaleDB overflødig.
+Skemaet i sin helhed er vist i produktrapportens bilag 2.
+
+**Node-agent.** Signalkæden går fra rå IQ til fem tal pr. kanal: Hann-vindue,
+Welch-estimering af effektspektret, FIR-filtrering og decimering ned til
+kanalen, FM-demodulation ved én kompleks multiplikation og én `atan2` pr.
+sample, og derefter metrikudledningen. Frekvenstransformationen er
+`spektra-fft`. Filtrering og decimering står for omkring 60% af kædens
+regnetid og effektspektrumsestimeringen for knap en tredjedel, og med den
+fordeling er en Raspberry Pi 5 nok til fire kanaler.
+
+**Sikkerhed.** Fire roller har adskilte rettigheder, og reglen for, hvilke noder
+en bruger må høre om, er implementeret ét sted og deles mellem REST-API'et og
+WebSocket-forbindelsen. To kopier af den regel ville før eller siden være
+uenige, og en tekniker, der ikke kan se en node over den ene grænseflade, må
+heller ikke kunne læse dens alarmer over den anden. Nodens egen legitimation
+slås op ved hver skrivning og bestemmer, hvem afsenderen er, så en node ikke kan
+indsende på en andens vegne.
+
+
+# Projektdagbog
+
+Logbogen er ført fra første dag i forløbet med én række pr. projektdag og findes
+i bilag 3.
+
+
+# Realiseret tidsplan
+
+Den realiserede plan afviger fra den estimerede på to punkter: rækkefølgen
+inden for faserne, og hvor tæt opgaverne lå.
+
+Fase 0 og fase 1 fulgte planen i det store. Protokol, database, emulator,
+login og idriftsættelse landede i den rækkefølge, der var tegnet. Afvigelsen
+begyndte i fase 2 og 3. Detektor, alarmer, webklient, udkald og
+driftsovervågning blev skrevet som én samlet serverkerne, før signalkæden var
+færdig, fordi webklienten og alarmstierne var nødvendige for at afprøve
+dataindtaget under belastning. Signalkæden, aggregeringen og
+eftersendelsen fulgte umiddelbart efter og indhentede den planlagte
+faseafgrænsning.
+
+Den største tidsforskydning var skaleringsarbejdet. Hundrede noder afslørede
+partitionering og WAL-tryk; syv tusinde noder afslørede detektoren og
+webklientens DOM-opdateringer. Ingen af delene havde egne linjer i den
+estimerede plan ud over K4.2 og K5. De brugte den tid, der var tegnet til
+fase 3, og K8.3 og K8.4 blev ikke nået.
+
+Den fysiske node (P9) lå senere end tegnet. Opgaven afhang af en leverance, og
+en leverance kunne ikke planlægges som en arbejdsopgave: de estimerede timer til
+opbygningen var rimelige, men planen havde ingen linje til at vente på udstyret.
+Undervejs faldt den planlagte USB-SSD ud af indkøbet, og noden kører fra
+SD-kort.
+
+Systemets opførsel ved flådestørrelse er derfor afprøvet med emulatoren. Den
+taler den samme protokol mod det samme dataindtag, og serveren skelner den ikke
+fra en fysisk node.
+
+Den realiserede tidsplan er vist i bilag 2.
+
+
+# Konklusion
+
+Problemformuleringen spurgte, hvordan man laver en plug-and-play-løsning til
+eksisterende radiomodtagere, der rapporterer signalkvalitet til en central
+server, som automatisk opdager degraderede signaler, visualiserer datagrundlaget
+og understøtter, at fejlen lukkes af et menneske fysisk nær modtageren.
+
+En node-agent på en enkeltkortscomputer udleder metrikker af rå IQ, aggregerer
+lokalt og taler en offentlig protokol. Serveren validerer, lagrer, detekterer
+mod en rullende baseline, skubber alarmer og binder dem til arbejdsordrer.
+Webklienten viser flåden og lader operatør og tekniker føre alarmen til lukket
+tilstand med historikken i behold.
+
+Syv af de ti krav er opfyldt, og tre er delvist opfyldt. K2's signalkæde
+producerer fire af fem metrikker; RDS-bloklaget med CRC, offsetord og gruppesynkronisering er
+implementeret og testet, men den analoge forende, der genfinder 19 kHz-piloten og
+låser den undertrykte 57 kHz-underbærebølge, er ikke, og demodulationsfejlraten
+optræder derfor ikke blandt de evner, en node oplyser. K9's rollemodel,
+nodelegitimation og suspension er på plads, mens de grænser for
+indsendelsesfrekvens og payloadstørrelse, protokollen fastsætter, endnu ikke
+håndhæves på serversiden. K8's kort, tidsserier og fortættede intervaller er på
+plads, men spektrumvisningen, sammenligningen af flere noder og tidslinjen med
+alarmer og udkald er ikke nået.
+
+
+# Diskussion
+
+Estimeringen ramte fasernes indhold bedre end deres rækkefølge. Signalkædens
+49 timer var planens mest usikre estimat, og usikkerheden holdt: kæden
+landede, men diskriminator, clippy-regler og RDS tog længere end
+estimeret. Estimeringen fangede ikke arbejdet mellem kravene. Sessionsudløb inde i HTMX-fragmenter, detektorens
+forespørgselsmønster ved tusindvis af noder og komprimering af statiske
+aktiver stod ikke som opgaver. De opstod, da systemet blev belastet, og de
+kostede mere end flere af de navngivne K-linjer.
+
+Kravspecifikationen dækkede det, problemformuleringen spurgte om. Den dækkede
+ikke, at en rullende baseline gør live-inspektion farlig, hvis målingerne
+persisteres, eller at en WebSocket, der kun autentificeres ved oprettelse,
+overlever sin egen session. Begge dele er rettet, og begge burde have været
+synlige som acceptkriterier fra starten.
+
+Hvis planlægningen skulle gøres om, ville skaleringskørsler med emulatoren
+ligge tidligere og have egne estimater. Hundrede noder den 8. september og
+syv tusinde den 11. ændrede lagring, detektor og webklient mere end nogen
+enkelt feature-opgave i fase 3. Den anden ændring ville være at tegne
+rapportsporet som konkrete kapitler med deadlines, ikke kun som en løbende
+bjælke. Løbende betyder i praksis, at det, der kan udskydes, bliver udskudt.
