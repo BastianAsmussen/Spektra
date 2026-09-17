@@ -1,0 +1,47 @@
+---
+config:
+  gantt:
+    fontSize: 18
+    sectionFontSize: 20
+    barHeight: 30
+    barGap: 8
+    leftPadding: 140
+    gridLineStartPadding: 40
+---
+gantt
+    title Realiseret tidsplan, Spektra
+    dateFormat YYYY-MM-DD
+    axisFormat %d/%m
+    todayMarker off
+
+    section Fase 0
+    Case, krav og repository (P1, P2, P4)                    :done, r0a, 2026-09-01, 1d
+    Hardwareundersøgelse (P3)                                :done, r0b, 2026-09-01, 7d
+
+    section Fase 1
+    Protokolskema version 1 (K1.1)                           :done, r1a, 2026-09-02, 1d
+    Databaseskema og migrationer (P5)                        :done, r1c, 2026-09-03, 1d
+    Emulator (P6)                                            :done, r1d, 2026-09-04, 1d
+    Login og adgangskontrol (K9.1)                           :done, r1e, 2026-09-05, 1d
+    Dataindtag, serverkerne, CI og idriftsættelse            :done, r1f, 2026-09-06, 1d
+
+    section Fase 2
+    Node-agent, signalkæde, aggregering (K1.2, K2, K3)       :done, r2a, 2026-09-06, 3d
+    Partitioner og flådeskalering (K4.2)                     :done, r2c, 2026-09-08, 1d
+    Fysisk node (P9)                                         :active, r2d, 2026-09-12, 6d
+
+    section Fase 3
+    Detektor, alarmer, web, drift (K5 til K8, K10)           :done, r3a, 2026-09-06, 1d
+    Session, live-visning, skaleringsrettelser               :done, r3b, 2026-09-09, 3d
+
+    section Fase 4
+    Rapportskrivning (L2)                                    :active, r4a, 2026-09-12, 6d
+    Testkonditioner og færdiggørelse (P10, P11)              :r4b, 2026-09-23, 2d
+    Aflevering                                               :milestone, m1, 2026-09-24, 0d
+
+    section Løbende
+    Logbog (L1)                                              :active, l1, 2026-09-01, 24d
+
+    section Fase 5
+    Generalprøve og demonstration (P12)                     :r5a, 2026-09-25, 5d
+    Fremlæggelse                                            :milestone, m2, 2026-09-30, 0d

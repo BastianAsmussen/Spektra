@@ -33,6 +33,24 @@ Kildekoden til protokol, server og node-agent findes på
 Case beskrivelse og problemformulering optræder ordret i begge rapporter.
 
 
+# Indledning
+
+Fem tal beskriver en FM-kanals tilstand: signalstyrken, forholdet mellem signal
+og støjgulv, afvigelsen mellem den frekvens bærebølgen skulle ligge på og den,
+den faktisk ligger på, hvor bredt den fylder i spektret, og hvor stor en andel
+af RDS-blokkene der ikke består deres kontrolsum. En SDR-modtager kan aflæse dem
+alle sammen, hvert minut, uden at nogen er til stede. En sender på vej mod en
+fejl flytter på tallene længe før en lytter hører forskel.
+
+Målingen er billig og har været mulig i årevis;
+det, der mangler, er et aftalt sted at sende den hen og noget, der kigger på den
+bagefter. Systemet består af en node-agent, der kører på en enkeltkortscomputer
+med en SDR-modtager påsat, en åben protokol mellem noden og serveren, og en
+central server, som sammenholder hver nodes målinger med nodens egen historik,
+rejser en alarm, når kurven knækker, og lader en operatør sende en tekniker
+afsted for at afgøre, om alarmen var reel.
+
+
 # Case beskrivelse
 
 Radio er kritisk infrastruktur og bruges blandt andet til beredskabsinformation,
@@ -116,6 +134,39 @@ sendes ud til en station.
 | K10 | Overvågning af systemets egen drift | Opfyldt | 2 | Drift | Systemet eksponerer nøgletal for sin egen tilstand: gennemløb i dataindtaget, kølængder, svartider, fejlrater og tidspunktet for detektionsmotorens seneste gennemløb. Udebliver dataindtag eller detektion ud over en fastsat grænse, rejser systemet selv en driftsalarm, så et stoppet system ikke fremstår som et system uden fejl. Node-agenten rapporterer desuden egen oppetid, belastning, temperatur og afvigelse på systemuret. |
 
 
+## Testkonditioner
+
+Flere krav har både et positivt og et negativt tilfælde.
+
+| ID | Krav reference | Krav opfyldt | Type | Kondition | Hvordan det testes |
+|:----|:---------|:------------|:------------|:-----------------------|:----------------------------------------|
+| T1 | K1 | Opfyldt | Integration | En ny node kan registrere sig og modtage legitimation | -> Start serveren med tom `users`- og `nodes`-tilstand -> Send `RegisterNode` med en ukendt identitet -> Forvent `OK` med node-id og bearer-token -> Gentag med samme identitet -> Forvent `ALREADY_EXISTS` |
+| T2 | K1 | Opfyldt | Integration | Ukendt protokolversion afvises entydigt | -> Send en anmodning med `protocol_version`, der ikke matcher tjenesten -> Forvent `INVALID_ARGUMENT` -> Send til en sti for en ikke-registreret major-version -> Forvent `UNIMPLEMENTED` |
+| T3 | K1 | Opfyldt | Integration | Noder med forskellige evner håndteres side om side | -> Registrér to noder med forskellige `Capabilities` -> Tildel kanaler til begge -> Indsend målinger, hvor den ene udelader en metrik -> Forvent accept for begge og fravær behandlet som fravær, ikke nul |
+| T4 | K2 | Delvist | Unit Test | Signalkæden udleder metrikkerne uden hardware | -> Kør node-agentens enhedstests med den syntetiske IQ-kilde -> Forvent bestået for vindue, Welch, FIR, FM og metrikudledning -> Bekræft, at ingen test åbner en fysisk modtager -> Fire metrikker udledes; demodulationsfejlraten mangler sin forende |
+| T5 | K2 | Delvist | Unit Test | Blokfejlraten udledes korrekt af en RDS-bitstrøm | -> Generér en RDS-bitstrøm med kendt andel af korrupte blokke -> Kør bloklagets afkodning -> Forvent, at den rapporterede blokfejlrate følger den indsatte inden for testens tolerance |
+| T5b | K2 | Ikke opfyldt | Funktionalitet | Demodulationsfejlraten udledes af rå IQ | -> Generér FM-IQ med indlejret RDS og kendt fejlrate -> Kør hele kæden -> Forvent en rapporteret demodulationsfejlrate -> Kræver piloten genfundet og 57 kHz-underbærebølgen låst |
+| T6 | K3 | Opfyldt | Integration | Eftersendelse er idempotent | -> Registrér en node og indsend den samme `MeasurementReport` to gange -> Forvent én række pr. kanal og metrik i `measurements` -> Tæl rækker før og efter den anden indsendelse -> Forvent uændret antal |
+| T7 | K3 | Opfyldt | Funktionalitet | Offlinejournalen eftersender uden tab | -> Afbryd forbindelsen til serveren under måling -> Lad journalen fylde med flere vinduer -> Genopret forbindelsen -> Forvent, at alle journalførte vinduer lander, og at dubletnøglen forhindrer dobbeltlagring |
+| T8 | K4 | Opfyldt | Integration | Ugyldige måleværdier afvises før skrivning | -> Indsend en rapport med en metrik uden for det fysiske interval -> Forvent `INVALID_ARGUMENT` -> Bekræft, at `measurements` er uændret |
+| T9 | K4 | Opfyldt | Integration | Partitioner oprettes bagud og fremad | -> Kør partitionsjobbet mod en database uden dags-partitioner -> Efterfyld målinger en uge bagud via emulatoren -> Forvent, at rækker lander i dags-partitioner og ikke i `measurements_default` |
+| T10 | K5 | Opfyldt | Integration | En vedvarende afvigelse rejser en forklarbar alarm | -> Opbyg en baseline for en node, kanal og metrik -> Indsend tre vinduer uden for båndet til samme side -> Forvent en alarm i tilstanden `open` med `explanation`, der indeholder baseline, værdi og tærskel |
+| T11 | K5 | Opfyldt | Integration | En enkeltstående outlier rejser ikke alarm | -> Opbyg en baseline -> Indsend ét vindue uden for båndet efterfulgt af normale vinduer -> Forvent ingen ny alarm |
+| T12 | K6 | Opfyldt | Funktionalitet | Alarmens livscyklus bevarer historik | -> Rejs en alarm -> Overgang til kvitteret med begrundelse og bruger -> Overgang til under efterprøvning -> Luk -> Forvent en `alarm_events`-række pr. skridt med bruger, tidspunkt og begrundelse |
+| T13 | K6 | Opfyldt | Integration | Nye alarmer skubbes til åbne klienter | -> Åbn en autentificeret WebSocket -> Rejs en alarm på en synlig node -> Forvent en hændelse på socketen inden for et sekund |
+| T14 | K6 | Opfyldt | Acceptance | Nodetavshed behandles som selvstændig hændelse | -> Stop en node, der ellers rapporterer hvert minut -> Vent ud over tavshedstærsklen -> Forvent en hændelse eller alarm, der ikke er knyttet til en metrikafvigelse |
+| T15 | K7 | Opfyldt | Funktionalitet | En alarm kan omsættes til arbejdsordre | -> Vælg en åben alarm som operatør -> Udfyld udkaldsformularen med en tekniker -> Forvent en `work_orders`-række knyttet til alarmen og noden |
+| T16 | K7 | Opfyldt | Backend/Sikkerhed | Kun tildelt tekniker eller administrator kan afslutte | -> Opret en arbejdsordre til tekniker A -> Forsøg afslutning som tekniker B -> Forvent 403 og uændret status -> Afslut som A eller som administrator -> Forvent, at ordren afsluttes |
+| T17 | K8 | Opfyldt | GUI/Acceptance | Kort og tidsserier viser flåden | -> Log ind som operatør -> Bekræft markører på kortet -> Åbn en node -> Vælg kanal og metrik -> Forvent en graf med punkter i det valgte interval |
+| T18 | K8 | Opfyldt | Funktionalitet | Store intervaller bruger fortættede data | -> Indsend rå vinduer og lad fortætningen køre -> Anmod om en serie bredere end rå-retentionen -> Forvent punkter fra `rollups` og ikke en tom graf |
+| T18b | K8 | Ikke opfyldt | GUI/Acceptance | Spektrum, sammenligning og tidslinje | -> Åbn en node som operatør -> Forvent et spektrum af det overvågede bånd -> Vælg en anden node til sammenligning -> Forvent begge i samme diagram -> Forvent alarmer og udkald markeret på tidsaksen |
+| T19 | K9 | Opfyldt | Backend/Sikkerhed | Fremmed nodes legitimation afvises | -> Registrér node A og B -> Indsend A's rapport med B's token -> Forvent afvisning -> Bekræft, at ingen rækker er skrevet for A |
+| T20 | K9 | Opfyldt | Backend/Sikkerhed | Suspenderet node afvises ved indsendelse | -> Suspendér en node under `/admin` -> Indsend en gyldig rapport fra noden -> Forvent afvisning -> Hæv suspensionen -> Forvent accept |
+| T21 | K9 | Opfyldt | Backend/Sikkerhed | Tekniker ser kun tildelte noder | -> Opret tekniker uden udkald til node X -> Åbn WebSocket og REST-liste -> Forvent, at X ikke optræder -> Udkald teknikeren til X -> Forvent, at X bliver synlig |
+| T22 | K10 | Opfyldt | Acceptance | Driftssiden viser nøgletal | -> Åbn `/drift` under belastning fra emulatoren -> Forvent gennemløb, svartider og tidspunkt for seneste detektorgennemløb -> Stop dataindtaget i et kvarter -> Forvent degraderet tilstand |
+| T23 | K10 | Opfyldt | Integration | Node-agenten rapporterer eget helbred | -> Start en node med syntetisk kilde -> Indsend eller afvent `ReportHealth` -> Forvent persisteret oppetid, belastning og urafvigelse i `node_health` |
+
+
 # Afgrænsning
 
 Systemet observerer og rapporterer. Det udfører ikke fejlretning, styrer ikke
@@ -162,6 +213,119 @@ kvalitet lagres.
 
 Der udvikles ikke en native mobilapplikation, og DAB+ understøttes ikke i denne
 version.
+
+
+# Brugervejledning
+
+
+## Installation
+
+Der er to installationer, der holdes adskilt. Serveren er publiceret og kræver
+ingen lokal opsætning for at blive afprøvet. Noden er den fysiske målestation.
+
+
+### Serveren
+
+Den publicerede installation er tilgængelig på <https://spektra.asmussen.tech>.
+Der skal ikke installeres noget for at åbne webklienten. Login sker på `/login`.
+
+Administratorstierne kræver rollen administrator. Den konto, serveren opretter
+ved første opstart, har rollen fra start og bruges til at afprøve dem; andre
+konti kan tildeles rollen bagefter.
+
+| Felt | Værdi |
+| --- | --- |
+| Adresse | <https://spektra.asmussen.tech> |
+| E-mail | <spektra@asmussen.tech> |
+| Adgangskode | 4N8o45Aglx0ETJOmPUluqDDe |
+
+Swagger-UI'et til REST-API'et ligger på `/swagger-ui` på den samme vært, og kald
+derfra bruger den samme session som webklienten.
+
+
+### Noden
+
+Noden bygges på en Raspberry Pi 5 med tilsluttet SDR-modtager og antenne.
+Systemimaget er NixOS og konfigureres fra projektets repository gennem
+`nixosConfigurations.radio-node`. Agenten kører som en systemd-tjeneste,
+`spektra-node-agent`, med tilstand under `/var/lib/spektra-node-agent`.
+
+Første opstart bruger op til tre miljøvariabler. `SPEKTRA_SERVER` peger på
+serverens gRPC-endepunkt. `SPEKTRA_STATE_DIR` er tilstandsmappen. Ved den første
+registrering kan en midlertidig `SPEKTRA_ENROLLMENT_TOKEN` kræves, hvis serveren
+er konfigureret til det; herefter ligger nodens egen legitimation på disken, og
+tokenet bruges ikke igen.
+
+Ved første opstart registrerer agenten sig selv, persisterer identitet og
+legitimation og henter sin kanalplan. Efter genstart genoptages målingen fra den
+cachede plan, også hvis serveren midlertidigt er utilgængelig.
+
+Modtageren kræver, at kernens DVB-driver ikke har bundet sig til USB-enheden
+først. Det er
+håndteret i værtskonfigurationen gennem `hardware.rtl-sdr.enable`. SoapySDR
+finder sine plugins gennem `SOAPY_SDR_PLUGIN_PATH`.
+
+
+## Anvendelse
+
+Webklienten har fire roller. Den synlige flade er den samme; det, der ændrer
+sig, er hvilke noder og hvilke knapper der er tilgængelige.
+
+
+### Operatør
+
+Operatøren overvåger flåden. Forsiden viser kortet over noder, en sideinddelt
+liste og de åbne alarmer. Et klik på en node åbner panelet med tidsserier,
+nodens helbred og live-aflæsning. Adressen `/nodes/{id}` er en rigtig rute, så den kan
+sendes til en kollega og ankomme med panelet allerede åbent.
+
+En ny alarm kvitteres fra alarmlisten eller fra nodens panel. Tilstanden går fra
+åben til kvitteret med en begrundelse. Skal fejlen efterprøves på stedet,
+omsættes alarmen til en arbejdsordre gennem udkaldsformularen, hvor teknikeren
+vælges.
+
+
+### Tekniker
+
+Teknikeren ser kun de noder, vedkommende er sendt ud til. Arbejdsordrerne står
+under Arbejdsordrer på forsiden. På stedet registreres, om fejlen fortsat er til stede,
+hvad årsagen vurderes at være, og hvilken handling der er foretaget. Resultatet
+føres tilbage til den udløsende alarm, når ordren afsluttes.
+
+
+### Administrator
+
+Administratoren har desuden siden `/admin`. Derfra oprettes og deaktiveres
+brugere, noder planlægges og redigeres, legitimation roteres, og en node
+suspenderes eller genoptages. En suspenderet node afvises ved næste indsendelse.
+
+
+### Læser
+
+Læseren har læseadgang til målinger og alarmer og ingen knapper, der ændrer
+tilstand. Rollen er til den, der skal følge med uden at kunne kvittere eller
+udkalde.
+
+
+## Service
+
+Den løbende drift følges på `/drift`. Siden viser nøgletal for dataindtagets
+gennemløb, svartider, fejlrater og tidspunktet for detektorens seneste gennemløb.
+Tallene på siden opdateres hvert andet sekund, og nøgletallene i sidehovedet
+opdateres hvert femte sekund på alle sider.
+
+Går der et kvarter uden en accepteret rapport fra nogen node, kalder serveren
+sig selv degraderet. Går der tre minutter uden et gennemført detektorgennemløb,
+gælder det samme. Begge tilstande vises på driftssiden. De skrives ikke til
+`alarms`-tabellen, fordi hver række i den hører til en node.
+
+En node tages midlertidigt ud ved at suspendere den under `/admin`. Indsendelser
+afvises, indtil suspensionen hæves. Skal en node udskiftes permanent, roteres
+dens legitimation, så den gamle token bliver ugyldig, før den nye agent
+registrerer sig.
+
+Applikationslogfiler ligger hos systemd på værten (`journalctl -u spektra`).
+Nodens egne logfiler ligger tilsvarende under `spektra-node-agent`.
 
 
 # Teknisk produktdokumentation
@@ -939,3 +1103,77 @@ opfylder K8 ved store intervaller, uden at brugeren vælger opløsningen.
 Nye alarmer og ændrede nodetilstande skubbes over WebSocket-forbindelsen og
 indsættes i den åbne side. Der er ingen periodisk genindlæsning, og en operatør,
 der har oversigten fremme, ser en alarm, i samme øjeblik den rejses.
+
+
+## Testrapport
+
+Testkonditionerne T1 til T23, T5b og T18b er fordelt på automatiske tests, manuelle
+accepttests og belastningskørsler.
+
+
+### Automatiske tests
+
+Ingen af node-agentens enhedstests åbner en fysisk modtager; den
+syntetiske IQ-kilde dækker vindue, Welch, FIR, FM, RDS og metrikudledning
+(T4, T5). Serveren har integrationstests for autentificering, dataindtag,
+kanalplan, alarmer, arbejdsordrer, WebSocket-filtrering, partitionering og
+idempotent eftersendelse (T1 til T3, T6, T8 til T13, T16, T19 til T21, T23).
+Testsuiten køres lokalt mod `compose.test.yaml` og i byggeautomatikken mod en
+kortlivet PostgreSQL, arbejdsgangen selv starter.
+
+To benchmarks ligger uden for den almindelige testsuite: `server/benches/ingest`
+for dataindtagets gennemløb og `node-agent/benches/dsp` for signalkædens
+behandlingstid. De kræver ingen database og ingen modtager.
+
+
+### Simuleret flåde
+
+Emulatoren har kørt flåder på hundrede og på syv tusinde noder mod den
+publicerede server. Hundrede noder afslørede WAL- og partitioneringsproblemet
+bag K4 (T9). Syv tusinde noder afslørede detektorens forespørgselsmønster og
+webklientens DOM-opdateringer (T10, T17, T22). Begge kørsler er dokumenteret i
+logbogen og indgår som evidens for, at kravene holder under belastning og ikke
+kun i enhedstesten.
+
+
+### Fysisk degraderingstest
+
+Den kvantificerede test med dæmpeled mellem FM-sender og modtager er planlagt
+til ugen mellem aflevering og fremlæggelse. Den er ikke udført endnu, fordi
+den fysiske node stadig bygges. Softwaren, der skal måle og alarmere under
+testen, er på plads; det, der mangler, er hardwaren og den kontrollerede
+dæmpning. Indtil da dækkes afvigelsesstien af syntetiske og emulerede målinger
+(T10, T11).
+
+
+### Samlet vurdering
+
+De automatiske tests og de emulerede belastningskørsler er gennemført. Den manuelle GUI-gennemgang (T17) er udført mod den publicerede
+installation. Den fysiske dæmpningstest udestår og ændrer ikke
+opfyldelsesstatus for K1 til K10.
+
+
+# Referencer
+
+Google. (2024). Protocol Buffers Language Guide (proto3). Hentet 17. september
+2026, fra <https://protobuf.dev/programming-guides/proto3/>
+
+gRPC Authors. (2024). gRPC Documentation. Hentet 17. september 2026, fra
+<https://grpc.io/docs/>
+
+CENELEC. (1998). Specification of the radio data system (RDS) for VHF/FM sound
+broadcasting in the frequency range from 87,5 to 108,0 MHz (EN 50067:1998).
+Bruxelles: CENELEC.
+
+Welch, P. D. (1967). The use of fast Fourier transform for the estimation of
+power spectra: A method based on time averaging over short, modified
+periodograms. IEEE Transactions on Audio and Electroacoustics, 15(2), 70-73.
+
+Tokio Contributors. (2024). Tokio documentation. Hentet 17. september 2026, fra
+<https://docs.rs/tokio/>
+
+Diesel Contributors. (2024). Diesel documentation. Hentet 17. september 2026,
+fra <https://diesel.rs/>
+
+NixOS Contributors. (2024). NixOS Manual. Hentet 17. september 2026, fra
+<https://nixos.org/manual/nixos/stable/>
