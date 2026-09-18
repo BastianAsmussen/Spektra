@@ -1,53 +1,102 @@
+# Spektra overordnet arkitektur. Rendered with docs/figures/build.sh.
+
 vars: {
   d2-config: {
     layout-engine: elk
-    theme-id: 0
+    pad: 20
   }
 }
 
-direction: right
+grid-rows: 2
+grid-columns: 3
+vertical-gap: 110
+horizontal-gap: 130
+
+classes: {
+  box: {
+    style: {
+      font-size: 24
+      bold: true
+      font-color: "#4c4f69"
+      border-radius: 6
+      stroke-width: 2
+    }
+  }
+  part: {
+    style: {
+      font-size: 20
+      bold: false
+      font-color: "#4c4f69"
+      fill: "#ffffff"
+      border-radius: 4
+      stroke-width: 1
+    }
+  }
+  wire: {
+    style: {
+      font-size: 19
+      font-color: "#4c4f69"
+      stroke: "#4c4f69"
+      stroke-width: 2
+    }
+  }
+  spec: {
+    style: {
+      font-size: 19
+      font-color: "#6c6f85"
+      stroke: "#8c8fa1"
+      stroke-width: 2
+      stroke-dash: 4
+    }
+  }
+}
+
+gap1: "" {width: 10; height: 10; style.opacity: 0}
+
+protocol: "Protokolspecifikation\nproto/v1/*.proto\n(selvstændig leverance)" {
+  class: box
+  style.fill: "#eff1f5"
+  style.stroke: "#8c8fa1"
+  style.stroke-dash: 4
+  style.font-size: 21
+  style.bold: false
+}
+gap2: "" {width: 10; height: 10; style.opacity: 0}
 
 node_agent: "Node-agent" {
-  shape: rectangle
-  style.border-radius: 4
-  sampling: "SDR + signalkæde"
-  aggregate: "Aggregering + journal"
-  report: "gRPC-klient"
+  class: box
+  style.fill: "#dfe8fd"
+  style.stroke: "#1e66f5"
+  grid-columns: 1
+  grid-gap: 12
+  sampling: "SDR-modtager\n+ signalkæde" {class: part; style.stroke: "#1e66f5"}
+  aggregate: "Aggregering\n+ journal" {class: part; style.stroke: "#1e66f5"}
+  report: "gRPC-klient" {class: part; style.stroke: "#1e66f5"}
 }
 
 server: "Central server" {
-  shape: rectangle
-  style.border-radius: 4
-  ingest: "Dataindtag + validering"
-  store: "PostgreSQL + fortætning"
-  detect: "Baseline + detektor"
-  api: "REST, HTMX, WebSocket"
+  class: box
+  style.fill: "#ede0fc"
+  style.stroke: "#8839ef"
+  grid-columns: 2
+  grid-gap: 12
+  ingest: "Dataindtag\n+ validering" {class: part; style.stroke: "#8839ef"}
+  detect: "Baseline\n+ detektor" {class: part; style.stroke: "#8839ef"}
+  store: "PostgreSQL\n+ fortætning" {class: part; style.stroke: "#8839ef"}
+  api: "REST, HTMX,\nWebSocket" {class: part; style.stroke: "#8839ef"}
 }
 
 web: "Webklient" {
-  shape: rectangle
-  style.border-radius: 4
-  ui: "Kort, tidsserier, alarmer"
-  live: "Live-status"
+  class: box
+  style.fill: "#e1f0dc"
+  style.stroke: "#40a02b"
+  grid-columns: 1
+  grid-gap: 12
+  ui: "Kort, tidsserier,\nalarmer" {class: part; style.stroke: "#40a02b"}
+  live: "Live-status" {class: part; style.stroke: "#40a02b"}
 }
 
-protocol: "Protokolspecifikation" {
-  shape: rectangle
-  style.border-radius: 4
-  style.stroke-dash: 3
-  schema: "proto/v1/*.proto"
-  note: "Selvstændig leverance"
-}
-
-node_agent -> server: "gRPC / protobuf\n(TLS)" {
-  style.bold: true
-}
-server -> web: "HTTP + WebSocket\n(HTML-fragmenter)" {
-  style.bold: true
-}
-protocol -> node_agent: "genererer klient" {
-  style.stroke-dash: 3
-}
-protocol -> server: "genererer tjeneste" {
-  style.stroke-dash: 3
-}
+node_agent -> server: "gRPC\nover TLS" {class: wire}
+server -> web: "HTTP +\nWebSocket" {class: wire}
+protocol -> node_agent: "genererer klient" {class: spec}
+protocol -> server: "genererer tjeneste" {class: spec}
