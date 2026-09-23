@@ -9,8 +9,8 @@ procesrapporten, så dagbogen kan sammenholdes direkte med den realiserede
 tidsplan ved projektets afslutning.
 
 | Dato | Issues | Aktivitet |
-|---|---|---|
-| 2026-09-01 | P1, P2, P3, P4 | Udarbejdet case beskrivelse og problemformulering. Afgrænset projektets omfang. Undersøgt radiomodtagere og FM med henblik på valg af hardware. Opstillet kravspecifikationen med K1 til K10 fordelt på kategorier og prioritet. Oprettet repository med cargo-workspace, nix-flake, udviklingsmiljø og fælles lint-regler. Skitseret procesrapporten med projektplanlægning og estimeret tidsplan efter trepunktsestimater. |
+|:------------|:----------------|:---------------------------------------------------------------------|
+| 2026-09-01 | P1, P2, P3, P4 | Udarbejdet case beskrivelse og problemformulering. Afgrænset projektets omfang. Undersøgt radiomodtagere og FM med henblik på valg af hardware. Opstillet kravspecifikationen med K1 til K10 fordelt på kategorier og prioritet. Oprettet repository med cargo-workspace, nix-flake, udviklingsmiljø og fælles lint-regler. Skitseret procesrapporten med projektplanlægning og estimeret tidsplan med timeestimat pr. opgave. |
 | 2026-09-02 | K1.1 | Skrevet protokolskemaets version 1 fordelt på seks skemafiler for fælles typer, node, måling, dataindtag, helbred og kanal. |
 | 2026-09-03 | P5 | Oprettet databasemigrationerne fra `create_types` til `create_node_channels` for brugere, roller, noder, kanaler, målinger, alarmer og arbejdsordrer. |
 | 2026-09-04 | P6 | Opsat emulator til simuleret nodeflåde. |
@@ -39,3 +39,6 @@ tidsplan ved projektets afslutning.
 | 2026-09-16 | L2 | Sikkerhed og frontend i produktrapporten. Derefter metode- og teknologivalg i procesrapporten for resten af stakken: Rust, axum, tonic, diesel, spektra-fft, askama/HTMX, uPlot/Leaflet, ntfy, NixOS. Hvert underafsnit navngiver det, der tabte, så det ikke bare er en smagssag. Hardwareafsnittet stod der i forvejen. |
 | 2026-09-17 | L2 | Brugervejledning (installation, anvendelse pr. rolle, service), væsentlige elementer, indledninger, testkonditioner T1 til T23, testrapport, referencer, realiseret tidsplan, konklusion og diskussion. Krav-opfyldt sat til Opfyldt på K1 til K10. Admin-login og vejledernavne står som pladsholdere, til de er skrevet ind før aflevering. Den fysiske dæmpningstest venter stadig på, at noden er oppe. |
 | 2026-09-18 | L2 | Figurer og diagrammer. `docs/figures/build.sh` renderer d2-diagrammerne og begge tidsplaner til SVG med typst og Libertinus som tekst. Databasediagrammet er farvet efter delsystem. |
+| 2026-09-21 | P9 | Noden venter stadig på kabler. |
+| 2026-09-22 | P9 | Stadig ingen kabler, så noden står. |
+| 2026-09-23 | L2, P11 | Indledningerne og korrektur på begge rapporter. `docs/render.sh` bygger begge PDF'er med bilagene bagerst. |

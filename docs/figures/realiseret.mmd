@@ -1,12 +1,32 @@
 ---
 config:
+  theme: base
+  themeVariables:
+    fontFamily: "Libertinus Serif, Georgia, serif"
+    textColor: "#4c4f69"
+    titleColor: "#4c4f69"
+    sectionBkgColor: "#eff1f5"
+    altSectionBkgColor: "#e6e9ef"
+    gridColor: "#ccd0da"
+    doneTaskBkgColor: "#ccd0da"
+    doneTaskBorderColor: "#9ca0b0"
+    activeTaskBkgColor: "#7287fd"
+    activeTaskBorderColor: "#1e66f5"
+    taskBkgColor: "#eff1f5"
+    taskBorderColor: "#acb0be"
+    taskTextColor: "#4c4f69"
+    taskTextDarkColor: "#4c4f69"
+    taskTextOutsideColor: "#4c4f69"
+    taskTextLightColor: "#eff1f5"
   gantt:
-    fontSize: 18
-    sectionFontSize: 20
-    barHeight: 30
-    barGap: 8
-    leftPadding: 140
-    gridLineStartPadding: 40
+    fontSize: 16
+    sectionFontSize: 18
+    barHeight: 26
+    barGap: 7
+    leftPadding: 130
+    rightPadding: 40
+    gridLineStartPadding: 30
+    useWidth: 1400
 ---
 gantt
     title Realiseret tidsplan, Spektra
@@ -15,33 +35,35 @@ gantt
     todayMarker off
 
     section Fase 0
-    Case, krav og repository (P1, P2, P4)                    :done, r0a, 2026-09-01, 1d
-    Hardwareundersøgelse (P3)                                :done, r0b, 2026-09-01, 7d
+    Case, krav og repository (P1, P2, P4)       :done, r0a, 2026-09-01, 1d
+    Hardwareundersøgelse (P3)                   :done, r0b, 2026-09-01, 7d
 
     section Fase 1
-    Protokolskema version 1 (K1.1)                           :done, r1a, 2026-09-02, 1d
-    Databaseskema og migrationer (P5)                        :done, r1c, 2026-09-03, 1d
-    Emulator (P6)                                            :done, r1d, 2026-09-04, 1d
-    Login og adgangskontrol (K9.1)                           :done, r1e, 2026-09-05, 1d
-    Dataindtag, serverkerne, CI og idriftsættelse            :done, r1f, 2026-09-06, 1d
+    Protokolskema (K1.1)                        :done, r1a, 2026-09-02, 1d
+    Databaseskema (P5)                          :done, r1b, 2026-09-03, 1d
+    Emulator (P6)                               :done, r1c, 2026-09-04, 1d
+    Login og adgangskontrol (K9.1)              :done, r1d, 2026-09-05, 1d
+    Serverkerne, CI og drift (P7, P8)           :done, r1e, 2026-09-06, 1d
 
     section Fase 2
-    Node-agent, signalkæde, aggregering (K1.2, K2, K3)       :done, r2a, 2026-09-06, 3d
-    Partitioner og flådeskalering (K4.2)                     :done, r2c, 2026-09-08, 1d
-    Fysisk node (P9)                                         :active, r2d, 2026-09-12, 6d
+    Node-agent og signalkæde (K1.2, K2)         :done, r2a, 2026-09-06, 3d
+    Aggregering og journal (K3)                 :done, r2b, 2026-09-08, 1d
+    Flådeskalering (K4.2)                       :done, r2c, 2026-09-08, 1d
+    Fysisk node, afventer kabler (P9)           :active, r2d, 2026-09-12, 11d
 
     section Fase 3
-    Detektor, alarmer, web, drift (K5 til K8, K10)           :done, r3a, 2026-09-06, 1d
-    Session, live-visning, skaleringsrettelser               :done, r3b, 2026-09-09, 3d
+    Detektor, alarm, web, drift (K5 til K10)    :done, r3a, 2026-09-06, 1d
+    Session og live-visning (K8, K9.1)          :done, r3b, 2026-09-09, 2d
+    Skaleringsrettelser (K5, K8, K10)           :done, r3c, 2026-09-11, 1d
 
     section Fase 4
-    Rapportskrivning (L2)                                    :active, r4a, 2026-09-12, 6d
-    Testkonditioner og færdiggørelse (P10, P11)              :r4b, 2026-09-23, 2d
-    Aflevering                                               :milestone, m1, 2026-09-24, 0d
+    Rapportkapitler (L2)                        :done, r4a, 2026-09-12, 6d
+    Figurer og diagrammer (L2)                  :done, r4b, 2026-09-18, 1d
+    Indledning og sideantal (L2, P11)           :active, r4c, 2026-09-23, 1d
+    Aflevering                                  :milestone, m1, 2026-09-24, 0d
 
     section Løbende
-    Logbog (L1)                                              :active, l1, 2026-09-01, 24d
+    Logbog (L1)                                 :done, l1, 2026-09-01, 23d
 
     section Fase 5
-    Generalprøve og demonstration (P12)                     :r5a, 2026-09-25, 5d
-    Fremlæggelse                                            :milestone, m2, 2026-09-30, 0d
+    Fremlæggelse (P12)                          :milestone, m2, 2026-10-01, 0d
