@@ -70,6 +70,16 @@
           description = "Value of `RUST_LOG` for the service.";
         };
 
+        ntfyUrl = mkOption {
+          type = types.nullOr types.str;
+          default = null;
+          example = "https://ntfy.sh";
+          description = ''
+            Value of `SPEKTRA_NTFY_URL`. The topic goes in `environmentFile`:
+            on a public server anyone who knows it can subscribe.
+          '';
+        };
+
         database = {
           createLocally = mkOption {
             type = types.bool;
@@ -102,9 +112,9 @@
             - `SPEKTRA_ADMIN_EMAIL` and `SPEKTRA_ADMIN_PASSWORD`, which create
               the administrator on the first start against an empty `users`
               table and are ignored on every start after that.
-            - `SPEKTRA_NTFY_URL`, `SPEKTRA_NTFY_TOPIC` and the optional
-              `SPEKTRA_NTFY_TOKEN`, without which alarms reach the live
-              channel but no phone.
+            - `SPEKTRA_NTFY_TOPIC` and the optional `SPEKTRA_NTFY_TOKEN`.
+              Without a topic and `ntfyUrl`, alarms reach the live channel
+              but no phone.
           '';
         };
       };
@@ -157,6 +167,9 @@
           }
           // lib.optionalAttrs cfg.database.createLocally {
             DATABASE_URL = "postgres:///${cfg.database.name}?host=/run/postgresql";
+          }
+          // lib.optionalAttrs (cfg.ntfyUrl != null) {
+            SPEKTRA_NTFY_URL = cfg.ntfyUrl;
           };
 
           serviceConfig = {
