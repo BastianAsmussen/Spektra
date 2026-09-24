@@ -1147,6 +1147,28 @@ dæmpning. Indtil da dækkes afvigelsesstien af syntetiske og emulerede målinge
 (T10, T11).
 
 
+### Kendte fejl
+
+Gennemgangen af webklienten mod den publicerede installation (T17) fandt fejl i
+alarmvisningen, som ikke er rettet.
+
+- **Kanal.** Et alarmkort viser node og metrik, men ikke kanalen. To alarmer på
+  samme node og metrik kan ikke skelnes på kortet, selvom hver alarm har sin
+  egen `channel_id`.
+- **Metriknavn.** Kortet viser databasens identifikator, fx `signal_strength`,
+  hvor grafen for samme metrik viser Signalstyrke.
+- **Enhed og skalering.** Opsummeringen viser den rå værdi med én decimal og
+  uden enhed. Demodulationsfejlraten vises som andel, så en afvigelse langt
+  uden for båndet kan læses som `0.1` mod `0.0`. Tallene har decimalpunktum, hvor
+  driftssiden bruger komma.
+- **Nodestatus.** Flisen i flådeoversigten viser en node som rapporterende, også
+  når den har åbne alarmer. Kun markeringen på kortet viser alarmen.
+
+Metriknavn og enhed rettes samme sted: `summary()` i `server/src/api/alarms.rs`
+formaterer selv værdien, hvor live-visningen bruger `reading()` i
+`server/src/api/series.rs`.
+
+
 ### Samlet vurdering
 
 De automatiske tests og de emulerede belastningskørsler er gennemført. Den manuelle GUI-gennemgang (T17) er udført mod den publicerede
