@@ -3,15 +3,14 @@ title: "Distribueret overvågning af radiosignalkvalitet"
 subtitle: "Procesrapport"
 author:
   - name: "Bastian Almar Wolsgaard Asmussen"
-    affiliation: '`#text(size: 0.8em)[Vejledere: Simon Hoxer Bønding og Lars Thise Pedersen]`{=typst}'
-date: "24. september 2026"
 lang: da-DK
 ---
 
 # Læsevejledning
 
-Rapporten beskriver forløbet og de valg, der formede Spektra. Produktrapporten
-beskriver selve produktet, dets krav og den tekniske dokumentation.
+Rapporten beskriver den valgte fremgangsmåde og begrundelserne bag den, det
+faktiske forløb samt en refleksion over resultatet. Produktrapporten beskriver
+selve produktet, dets krav og den tekniske dokumentation.
 
 Produktrapporten bør læses først, fordi den viser, hvad systemet er. Rapporten
 viser, hvordan det blev til.
@@ -20,7 +19,7 @@ Systemets overordnede arkitektur er vist i produktrapportens bilag 1.
 Diagrammet viser systemets fire komponenter og de to grænseflader mellem dem,
 som teknologivalgene i kapitlet Metode- og teknologivalg bygger på.
 
-Databasens opbygning er vist i produktrapportens bilag 2.
+Databasens opbygning er vist i produktrapportens figur 1 i kapitlet Database.
 
 Systemet er publiceret på <https://spektra.asmussen.tech> og kræver ingen
 installation for at blive afprøvet. Adressen, administratorens brugernavn og
@@ -29,8 +28,6 @@ kapitel Brugervejledning.
 
 Kildekoden til protokol, server og node-agent findes på
 <https://github.com/BastianAsmussen/Spektra>.
-
-Case beskrivelse og problemformulering optræder ordret i begge rapporter.
 
 
 # Indledning
@@ -128,6 +125,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | P4 | Teknologivalg, opsætning af repository og udviklingsmiljø | 4 |
 | | **I alt** | **13** |
 
+: Fase 0, opgaver og estimat i timer
+
 
 ### Fase 1: protokol, dataindtag og publicering, 02/09 til 07/09
 
@@ -141,6 +140,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | P7 | Byggeautomatik, testdatabase og betinget udrulning | 4 |
 | P8 | Idriftsættelse af server med reverse proxy, TLS og navneopslag | 8 |
 | | **I alt** | **42** |
+
+: Fase 1, opgaver og estimat i timer
 
 
 ### Fase 2: signalbehandling og tidsserielagring, 08/09 til 14/09
@@ -157,6 +158,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | K4.3 | Fortætningsjob og aldersbestemt opbevaringspolitik | 7 |
 | P9 | Fysisk opbygning af node med modtager, antenne og systemimage | 6 |
 | | **I alt** | **79** |
+
+: Fase 2, opgaver og estimat i timer
 
 
 ### Fase 3: detektion, alarmering og webklient, 15/09 til 21/09
@@ -178,6 +181,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | K10.3 | Nodens rapportering af oppetid, belastning, temperatur og urafvigelse | 2 |
 | | **I alt** | **55** |
 
+: Fase 3, opgaver og estimat i timer
+
 
 ### Fase 4: udkald, hærdning og aflevering, 22/09 til 24/09
 
@@ -189,6 +194,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | P11 | Færdiggørelse og korrektur af begge rapporter | 8 |
 | | **I alt** | **22** |
 
+: Fase 4, opgaver og estimat i timer
+
 
 ### Løbende aktiviteter, 31/08 til 24/09
 
@@ -198,6 +205,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | L2 | Rapportskrivning parallelt med udviklingen fra uge 2 | 16 |
 | | **I alt** | **19** |
 
+: Løbende aktiviteter, opgaver og estimat i timer
+
 
 ### Fase 5: fremlæggelse, 25/09 til 29/09
 
@@ -205,6 +214,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | --- | --- | ---: |
 | P12 | Demonstration med dæmpeled og fremlæggelsesplan | 5 |
 | | **I alt** | **5** |
+
+: Fase 5, opgaver og estimat i timer
 
 
 ### Samlet estimat
@@ -219,6 +230,8 @@ Den estimerede tidsplan er vist i bilag 1.
 | Løbende aktiviteter | 19 |
 | Fase 5: fremlæggelse | 5 |
 | **I alt** | **235** |
+
+: Estimat i timer pr. fase
 
 Estimatet lander på 235 timer mod omkring 140 timers skematid over de 19
 arbejdsdage. Forskellen hentes i weekender og på længere dage.
@@ -248,6 +261,8 @@ arbejdstyper.
 | Fremlæggelse | 5 | 2 % |
 | **I alt** | **235** | **100 %** |
 
+: Estimat fordelt på arbejdstyper
+
 Fordelingen er tilrettelagt, så en blokeret opgave ikke standser projektet. Når
 en udviklingsopgave afventer noget udefra, eksempelvis levering af hardware eller
 svar fra vejleder, flyttes indsatsen til dokumentation eller til den næste
@@ -257,13 +272,42 @@ aktiviteter og ikke faser.
 
 # Metode- og teknologivalg
 
+
+## Arbejdsmetode
+
+Projektet følger en faseopdelt plan, og arbejdet inden for hver fase er
+iterativt. Kravene og tidsplanen blev lagt fast i Fase 0, og hver af de følgende
+faser bygger videre på et system, der allerede kører. Serveren blev publiceret i
+Fase 1, så hver senere ændring er afprøvet i den drift, den skal ende i.
+
+Før en ny del blev bygget, undersøgte jeg domænet bag den. Hvor forståelsen var
+selve målet, byggede jeg delen selv i stedet for at hente et færdigt bibliotek
+som `rustfft`. Signalkæden og `spektra-fft` er skrevet og afprøvet mod en
+syntetisk IQ-kilde, før en fysisk modtager var tilsluttet. En algoritme forstår
+jeg først, når jeg har implementeret den, og en signalkæde, jeg ikke forstår,
+kan jeg heller ikke fejlsøge, når en metrik viser noget forkert.
+
+Hver ændring skal bestå `nix flake check` i CI, før den når serveren.
+Kontrollen bygger begge pakker og kører clippy, formatering og hele
+testsuiten, og udrulningen sker kun ved et grønt resultat. Når et estimat
+skrider, skæres der efter kravenes prioritet fra 1 til 3 og ikke i testene.
+
+Scrum var det oplagte alternativ, fordi korte sprints med review og
+retrospektiv fanger en afvigelse tidligt. Metoden er dog bygget til at
+koordinere et team, og product owner, scrum master og det daglige
+stand-up-møde har intet at koordinere, når projektet har én deltager. Logbogen
+og den realiserede tidsplan dækker det samme behov for opfølgning. At bygge
+delene selv koster timer, som et færdigt bibliotek ville have sparet, men til
+gengæld kan jeg forklare og fejlsøge hver del af kæden, fordi jeg selv har
+skrevet den.
+
+
+## Hardware
+
 Hardwaren binder resten af stakken. Modtagerens opløsning afgør, hvilke
 metrikker der overhovedet kan udledes, og nodens regnekraft afgør, hvor dyr
 signalkæden må være pr. sekund signal. Begge dele er fastlagt, før der er skrevet
 en linje kode.
-
-
-## Hardware
 
 Problemformuleringen efterspørger en løsning til *eksisterende* radiomodtagere.
 Det er en påstand om, at systemet ikke er bundet til bestemt udstyr, og en
@@ -439,11 +483,11 @@ Valget følger direkte af K1. Kravet er et maskinlæsbart skema, der kan
 offentliggøres uafhængigt af kildekoden, med entydig afvisning af ukendte
 versioner og mulighed for at betjene flere versioner sideløbende. Et
 protobuf-skema med versionsfelt i pakkenavnet opfylder det uden en
-hjemmelavet kontraktsprotokol oven på JSON.
+hjemmelavet kontraktprotokol oven på JSON.
 
 JSON over REST blev fravalgt til nodens dataindtag. Det kunne have samlet begge
 grænseflader på ét transportlag, men det ville have svækket skemaet som kontrakt: en
-JSON-kontrakt er dokumentation, ikke en generérbar klient, og
+JSON-kontrakt er dokumentation, ikke en genererbar klient, og
 versionsforhandling bliver et konventionsspørgsmål i stedet for et
 pakkespørgsmål.
 
@@ -623,7 +667,7 @@ pr. døgn. Opbevaringspolitikken sletter et døgn ved at droppe en tabel, og
 pladsen frigives med det samme, hvor en `DELETE` efterlader døde rækker til
 `VACUUM`. Fortætningen ruller de rå vinduer op i time-, dags- og ugeopløsning,
 og rå rækker overlever 14 døgn. De to job gjorde TimescaleDB overflødig.
-Skemaet i sin helhed er vist i produktrapportens bilag 2.
+Skemaet i sin helhed er vist i produktrapportens figur 1.
 
 **Node-agent.** Signalkæden går fra rå IQ til fem tal pr. kanal: Hann-vindue,
 Welch-estimering af effektspektret, FIR-filtrering og decimering ned til

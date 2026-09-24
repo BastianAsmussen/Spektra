@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Usage: docs/render.sh [proces|produkt]...  Renders docs/<Rapport>.pdf with its bilag appended.
+# Usage: docs/render.sh [proces|produkt]...  Renders docs/<Rapport>_Bastian_Asmussen.pdf with its bilag appended.
 set -euo pipefail
 
 root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
@@ -28,9 +28,8 @@ proces_bilag() {
 
 produkt_bilag() {
 	landscape 'Bilag 1: Overordnet arkitektur' docs/figures/arkitektur.svg first
-	landscape 'Bilag 2: Databasediagram' docs/figures/database.svg
 
-	echo '## Bilag 3: Skærmbilleder af webklienten'
+	echo '## Bilag 2: Skærmbilleder af webklienten'
 	echo
 
 	shopt -s nullglob
@@ -44,7 +43,7 @@ produkt_bilag() {
 		printf '![%s](%s)\n\n' "$(basename "$s" .png)" "$s"
 	done
 
-	echo '## Bilag 4: Protokolskema'
+	echo '## Bilag 3: Protokolskema'
 	echo
 
 	for p in protocol/proto/v1/*.proto; do
@@ -56,6 +55,7 @@ produkt_bilag() {
 
 render() {
 	local name=$1 gen=$2
+	local out=docs/${name}_Bastian_Asmussen.pdf
 	"$gen" >"$tmp/$name-bilag.md"
 
 	nix-shell -p pandoc typst --run "pandoc -s -f markdown -t pdf --pdf-engine=typst \
@@ -66,9 +66,10 @@ render() {
     -V header-includes='#show table: set text(hyphenate: true)' \
     -V header-includes='#show heading: set block(above: 2.4em)' \
     -V header-includes='#show \"->\": box' \
-    -o docs/$name.pdf docs/$name.md $tmp/$name-bilag.md"
+    -H docs/titlepage.typ \
+    -o $out docs/$name.md $tmp/$name-bilag.md"
 
-	echo "docs/$name.pdf"
+	echo "$out"
 }
 
 for r in "${@:-proces produkt}"; do

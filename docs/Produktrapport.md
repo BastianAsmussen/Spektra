@@ -3,8 +3,6 @@ title: "Distribueret overvågning af radiosignalkvalitet"
 subtitle: "Produktrapport"
 author:
   - name: "Bastian Almar Wolsgaard Asmussen"
-    affiliation: '`#text(size: 0.8em)[Vejledere: Simon Hoxer Bønding og Lars Thise Pedersen]`{=typst}'
-date: "24. september 2026"
 lang: da-DK
 ---
 
@@ -20,7 +18,7 @@ Procesrapporten viser, hvordan det blev til.
 Systemets overordnede arkitektur er vist i bilag 1. Diagrammet viser systemets
 fire komponenter og de to grænseflader mellem dem.
 
-Databasens opbygning er vist i bilag 2.
+Databasens opbygning er vist i figur 1 i kapitlet Database.
 
 Systemet er publiceret på <https://spektra.asmussen.tech> og kræver ingen
 installation for at blive afprøvet. Adressen, administratorens brugernavn og
@@ -29,8 +27,6 @@ Brugervejledning.
 
 Kildekoden til protokol, server og node-agent findes på
 <https://github.com/BastianAsmussen/Spektra>.
-
-Case beskrivelse og problemformulering optræder ordret i begge rapporter.
 
 
 # Indledning
@@ -53,30 +49,31 @@ afsted for at afgøre, om alarmen var reel.
 
 # Case beskrivelse
 
-Radio er kritisk infrastruktur og bruges blandt andet til beredskabsinformation,
-når andre kommunikationskanaler er nede. Alligevel opdages et forringet signal
-typisk først, når lytterne klager, eller ved en manuel måling med fast interval.
-En fejl, der udvikler sig langsomt, får ikke signalet til at forsvinde. Det
-bliver blot gradvist dårligere, og en gradvis forværring er præcis den type fejl,
-et menneske er dårligst til at opdage.
+Radio er kritisk infrastruktur og bærer blandt andet beredskabsinformation, når
+andre kommunikationskanaler er nede. Alligevel opdages et forringet signal fra en
+sendestation typisk først, når lytterne klager, eller ved en manuel måling med
+fast interval. En fejl, der udvikler sig langsomt, får ikke signalet til at
+forsvinde. Signalet bliver gradvist dårligere, og den type forværring fanger
+hverken klager eller stikprøver i tide.
 
-Samtidig står der mange billige radiomodtagere rundt omkring hos private og hos
-institutioner. Den enkelte modtager er upålidelig alene, men mange modtagere set
-samlet giver et brugbart billede af, hvordan et signal faktisk opfattes. Der
-mangler et fælles, åbent grundlag for, at de kan bidrage, og løbende måling fra
-mange modtagere giver en datamængde, som skal struktureres derefter.
+Samtidig står der mange billige SDR-modtagere hos private og institutioner. Den
+enkelte modtager er upålidelig alene, men mange modtagere set samlet giver et
+brugbart billede af, hvordan signalet faktisk modtages i et område. Der mangler
+en åben protokol, som modtagerne kan rapportere over, og løbende målinger fra
+mange modtagere giver en datamængde, der skal lagres og struktureres.
 
 Indsamling alene er ikke nok. En automatisk opdagelse er kun en formodning,
-indtil et menneske har efterprøvet den på stedet, og resultatet skal tilbageføres
-til systemet. Ellers kan det aldrig afgøres, hvilke alarmer der var reelle.
+indtil en tekniker har efterprøvet den på stedet, og teknikerens resultat skal
+tilbageføres til systemet. Ellers kan det aldrig afgøres, hvilke alarmer der var
+reelle.
 
 
 ## Problemformulering
 
-Hvordan kan man lave en "plug-and-play"-løsning til eksisterende radiomodtagere,
-der rapporterer signalkvalitet til en central server, som automatisk opdager
-degraderede signaler, visualiserer datagrundlaget og understøtter, at fejlen
-lukkes af et menneske fysisk nær radiomodtageren?
+Hvordan kan eksisterende radiomodtagere uden manuel opsætning rapportere
+signalkvalitet over en åben protokol til en central server, der opdager
+degraderede signaler ud fra hver modtagers egen historik, visualiserer
+målingerne og understøtter udkald af en tekniker?
 
 
 # Krav- og accepttestspecifikation
@@ -112,6 +109,8 @@ implementere en node uden adgang til nodeagentens kildekode.
 | KN3 | Sikkerhed | Krav der beskytter datagrundlaget og systemet mod defekte, fejlkonfigurerede eller ondsindede noder og brugere. |
 | KN4 | Drift | Krav til systemets egen driftstilstand og til at fejl i systemet selv bliver synlige. |
 
+: Kravkategorier
+
 
 ## Krav skema
 
@@ -132,6 +131,8 @@ sendes ud til en station.
 | K8 | Visualisering af måledata | Delvist | 1 | Acceptance | Webklienten viser et kort over flådens noder med aktuel status, tidsserier pr. kanal og metrik med valgbart tidsinterval, en spektrumvisning af det overvågede bånd, sammenligning af flere noder eller kanaler i samme visning, og en tidslinje der sammenholder måledata med alarmer og udførte udkald. Visningerne forbliver brugbare ved store tidsintervaller, hvilket forudsætter udlevering af fortættede data. Kort, tidsserier og fortættede intervaller er på plads. Spektrumvisningen, sammenligningen af flere noder og tidslinjen er ikke nået; båndet vises kun som båndudnyttelse over tid. |
 | K9 | Sikkerhed | Delvist | 1 | Sikkerhed | Al kommunikation mellem node, server og klient er krypteret. Hver node autentificerer sig med egen legitimation og kan ikke indsende eller ændre data på vegne af en anden node. Brugeradgang styres gennem roller med adskilte rettigheder: administrator, operatør, tekniker og læser. En suspenderet node afvises ved indsendelse, og serveren begrænser indsendelsesfrekvens og payloadstørrelse pr. node. Kryptering, nodelegitimation, rollemodel og suspension er på plads. Mangler håndhævelse af indsendelsesfrekvens og payloadstørrelse, som protokollen fastsætter, men serveren endnu ikke afviser på. |
 | K10 | Overvågning af systemets egen drift | Opfyldt | 2 | Drift | Systemet eksponerer nøgletal for sin egen tilstand: gennemløb i dataindtaget, kølængder, svartider, fejlrater og tidspunktet for detektionsmotorens seneste gennemløb. Udebliver dataindtag eller detektion ud over en fastsat grænse, rejser systemet selv en driftsalarm, så et stoppet system ikke fremstår som et system uden fejl. Node-agenten rapporterer desuden egen oppetid, belastning, temperatur og afvigelse på systemuret. |
+
+: Krav skema, K1 til K10
 
 
 ## Testkonditioner
@@ -165,6 +166,8 @@ Flere krav har både et positivt og et negativt tilfælde.
 | T21 | K9 | Opfyldt | Backend/Sikkerhed | Tekniker ser kun tildelte noder | -> Opret tekniker uden udkald til node X -> Åbn WebSocket og REST-liste -> Forvent, at X ikke optræder -> Udkald teknikeren til X -> Forvent, at X bliver synlig |
 | T22 | K10 | Opfyldt | Acceptance | Driftssiden viser nøgletal | -> Åbn `/drift` under belastning fra emulatoren -> Forvent gennemløb, svartider og tidspunkt for seneste detektorgennemløb -> Stop dataindtaget i et kvarter -> Forvent degraderet tilstand |
 | T23 | K10 | Opfyldt | Integration | Node-agenten rapporterer eget helbred | -> Start en node med syntetisk kilde -> Indsend eller afvent `ReportHealth` -> Forvent persisteret oppetid, belastning og urafvigelse i `node_health` |
+
+: Testkonditioner, T1 til T23
 
 
 # Afgrænsning
@@ -239,31 +242,36 @@ konti kan tildeles rollen bagefter.
 | E-mail | <spektra@asmussen.tech> |
 | Adgangskode | 4N8o45Aglx0ETJOmPUluqDDe |
 
+: Administratorlogin til den publicerede server
+
 Swagger-UI'et til REST-API'et ligger på `/swagger-ui` på den samme vært, og kald
 derfra bruger den samme session som webklienten.
 
 
 ### Noden
 
-Noden bygges på en Raspberry Pi 5 med tilsluttet SDR-modtager og antenne.
-Systemimaget er NixOS og konfigureres fra projektets repository gennem
-`nixosConfigurations.radio-node`. Agenten kører som en systemd-tjeneste,
-`spektra-node-agent`, med tilstand under `/var/lib/spektra-node-agent`.
+Noden er en Raspberry Pi 5 med en SDR-modtager og en antenne. Den kører NixOS.
+Hver node er en post i `nodes` i `nix/node/host.nix`, eksempelvis
+`radio-node-1`, og posten bliver til sin egen konfiguration under
+`nixosConfigurations`.
 
-Første opstart bruger op til tre miljøvariabler. `SPEKTRA_SERVER` peger på
-serverens gRPC-endepunkt. `SPEKTRA_STATE_DIR` er tilstandsmappen. Ved den første
-registrering kan en midlertidig `SPEKTRA_ENROLLMENT_TOKEN` kræves, hvis serveren
-er konfigureret til det; herefter ligger nodens egen legitimation på disken, og
-tokenet bruges ikke igen.
+Sådan tages en ny node i brug:
 
-Ved første opstart registrerer agenten sig selv, persisterer identitet og
-legitimation og henter sin kanalplan. Efter genstart genoptages målingen fra den
-cachede plan, også hvis serveren midlertidigt er utilgængelig.
+1. Tilføj en post i `nodes`. Postens navn er også det navn, noden registrerer
+   sig under. Placering og modtager sættes med `latitude`, `longitude` og
+   `receiver`. Står noden uden kabel, sættes det trådløse netværk med `ssid`.
+2. Kræver serveren et registreringstoken, lægges det som
+   `SPEKTRA_ENROLLMENT_TOKEN` i `/var/lib/spektra-node-agent/enrollment.env`.
+   Tokenet bruges kun ved første registrering.
+3. Start noden. Agenten registrerer sig selv, gemmer identitet og legitimation
+   og henter sin kanalplan.
+4. Noden vises på kortet i webklienten.
 
-Modtageren kræver, at kernens DVB-driver ikke har bundet sig til USB-enheden
-først. Det er
-håndteret i værtskonfigurationen gennem `hardware.rtl-sdr.enable`. SoapySDR
-finder sine plugins gennem `SOAPY_SDR_PLUGIN_PATH`.
+Agenten kører som systemd-tjenesten `spektra-node-agent`. Efter en genstart
+genoptager den målingen fra den gemte kanalplan, også hvis serveren midlertidigt
+er utilgængelig. Serveradressen peger som standard på den publicerede server.
+Værtskonfigurationen holder kernens DVB-driver væk fra modtageren gennem
+`hardware.rtl-sdr.enable`.
 
 
 ## Anvendelse
@@ -408,6 +416,8 @@ implementere en node uden adgang til node-agentens kildekode, som K1 kræver.
 | `health.proto` | Nodens rapportering af sin egen driftstilstand |
 | `live.proto` | Live-inspektion af et enkelt kanalophold, som aldrig persisteres |
 | `ingest.proto` | Tjenesten `NodeIngest` med de seks kald |
+
+: Protokollens skemafiler
 
 
 ### Versionering
@@ -591,7 +601,7 @@ uanset om resten af RDS er interessant.
 
 Bloklaget er implementeret: differentiel afkodning, CRC, de fem offsetord,
 gruppesynkronisering og selve fejlraten. Den analoge forende, der producerer
-bitstrømmen, er ikke. Den kræver, at 19 kHz-piloten genfindes i multipleksen og
+bitstrømmen, er ikke. Den kræver, at 19 kHz-piloten genfindes i multiplekssignalet og
 tredobles for at låse den undertrykte 57 kHz-underbærebølge, et tilpasset
 filter til bifasesignalet og en timingsløkke ved 1187,5 baud.
 
@@ -646,7 +656,7 @@ fra en operatør lander inden for et sekund.
 
 ### Database
 
-Databasen er PostgreSQL. Skemaet er vist i sin helhed i bilag 2 og opbygges af
+Databasen er PostgreSQL. Skemaet er vist i sin helhed i figur 1 og opbygges af
 15 migrationer, der versioneres sammen med kildekoden og køres af serveren selv
 ved opstart. Tabellerne falder i fire grupper: adgang, flåde, måledata og
 hændelser.
@@ -657,6 +667,17 @@ hændelser.
 | Flåde | `nodes`, `node_credentials`, `channels`, `node_channels` |
 | Måledata | `measurements`, `rollups`, `node_health` |
 | Hændelser | `alarms`, `alarm_events`, `work_orders` |
+
+: Databasens tabeller fordelt på grupper
+
+```{=typst}
+#page(flipped: true)[
+  #figure(
+    image("docs/figures/database.svg", width: 100%),
+    caption: [Databasediagram, farvet efter delsystem],
+  )
+]
+```
 
 
 #### Normalisering og relationer
@@ -795,6 +816,8 @@ HTML-fragmenter fra de samme håndteringsfunktioner.
 | `ws` | Realtidshændelser | `/api/ws` |
 | `pages` | Sider og sidefragmenter | `/`, `/nodes/{id}`, `/fragments/fleet` |
 
+: REST-moduler og eksempler på stier
+
 Hvert modul eksponerer sin egen `routes()`, som samles i `main`. API'et er
 desuden dokumenteret maskinlæsbart og kan afprøves direkte gennem Swagger-UI'et
 på den publicerede server.
@@ -814,6 +837,8 @@ håndteringsfunktionerne, og afbildningen til statuskoder er fast:
 | Overtrædelse af en unik nøgle | 409 |
 | Overtrædelse af `NOT NULL` eller `CHECK` | 422 |
 | Uventet fejl | 500 |
+
+: Statuskoder pr. fejlsituation
 
 En uventet fejl logges med sin egentlige årsag på serveren og besvares udadtil
 med en generisk tekst. Klienten skal vide, at kaldet mislykkedes, ikke hvilken
@@ -878,6 +903,8 @@ samples til den time end til den næste.
 | `stddev` | Eksakt | Gennem identiteten for puljet varians |
 | `median` | Tilnærmet | Medianen af vinduernes medianer |
 | `p95` | Nej | Kan ikke gendannes af sammendrag |
+
+: Opløsningerne i fortætningen
 
 `p95` er udeladt af `rollups` frem for at stå der som en kolonne, der indeholder
 et tal, data ikke understøtter. En percentil af de rå samples kan ikke
@@ -1036,6 +1063,8 @@ Rollerne har adskilte rettigheder:
 | `operator` | Overvåger flåden og styrer alarmernes livscyklus |
 | `technician` | Ser kun de noder, vedkommende er sendt ud til |
 | `reader` | Læseadgang til målinger og alarmer |
+
+: Rollernes adgang
 
 Reglen for, hvilke noder en bruger må høre om, er implementeret ét sted og
 deles mellem REST-API'et og WebSocket-forbindelsen. En tekniker, der ikke kan
