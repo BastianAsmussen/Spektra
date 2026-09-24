@@ -43,3 +43,4 @@ tidsplan ved projektets afslutning.
 | 2026-09-22 | P9 | Stadig ingen kabler, så noden står. |
 | 2026-09-23 | L2, P11 | Indledningerne og korrektur på begge rapporter. `docs/render.sh` bygger begge PDF'er med bilagene bagerst. |
 | 2026-09-24 | K10.3 | Helbredsrapporten sendte 0 °C og load 0, når noden ikke kunne læse sensoren, og urafvigelsen var 0 før første svar fra serveren. Præcis det gæt, protokollen forbyder for målinger. Felterne er nu `optional`, kolonnerne nullable, og panelet siger ukendt. |
+| 2026-09-24 | K5, K6, K8 | Ti emulerede noder med en uges historik, og efter udrulningen rejste detektoren 44 alarmer på de fire defekte stationer på én gang. Detektionen virker, alarmkortet gør ikke: ingen kanal, metrikken står som `signal_strength`, og demodulationsfejlen står som 0.1 over 0.0. Skrevet ind som kendte fejl. |
