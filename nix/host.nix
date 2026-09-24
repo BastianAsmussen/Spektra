@@ -109,6 +109,7 @@
             host = if cfg.domain == null then "0.0.0.0" else "127.0.0.1";
             grpcHost = if cfg.domain == null then "0.0.0.0" else "127.0.0.1";
             environmentFile = config.sops.secrets.spektra_env.path;
+            ntfyUrl = "https://ntfy.sh";
           };
 
           caddy = mkIf (cfg.domain != null) {
