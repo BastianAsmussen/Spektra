@@ -13,13 +13,15 @@ message HealthReport {
   string protocol_version = 1;
   // When the node took these readings.
   google.protobuf.Timestamp measured_at = 2;
-  double uptime_seconds = 3;
-  double load_1m = 4;
-  double load_5m = 5;
-  double load_15m = 6;
-  double cpu_temperature_celsius = 7;
+  // Readings the node could not take are absent, never zero.
+  optional double uptime_seconds = 3;
+  optional double load_1m = 4;
+  optional double load_5m = 5;
+  optional double load_15m = 6;
+  optional double cpu_temperature_celsius = 7;
   // Clock offset (s): node minus server, from registration/ingest acks.
-  double clock_offset_seconds = 8;
+  // Absent until the node has seen a server timestamp.
+  optional double clock_offset_seconds = 8;
 }
 
 message HealthAck {

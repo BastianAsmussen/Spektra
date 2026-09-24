@@ -76,7 +76,7 @@ impl From<IdentityError> for ClientError {
 pub struct Client {
     inner: NodeIngestClient<Channel>,
     credential: Option<String>,
-    clock_offset_seconds: f64,
+    clock_offset_seconds: Option<f64>,
     delivery_delay: Option<Duration>,
 }
 
@@ -105,14 +105,14 @@ impl Client {
                 .send_compressed(CompressionEncoding::Zstd)
                 .accept_compressed(CompressionEncoding::Zstd),
             credential: None,
-            clock_offset_seconds: 0.0,
+            clock_offset_seconds: None,
             delivery_delay: None,
         })
     }
 
     /// The node's clock offset against the server, in seconds.
     #[must_use]
-    pub const fn clock_offset_seconds(&self) -> f64 {
+    pub const fn clock_offset_seconds(&self) -> Option<f64> {
         self.clock_offset_seconds
     }
 
@@ -324,7 +324,7 @@ impl Client {
 
         let server_since_epoch = Duration::new(seconds, nanos);
         self.clock_offset_seconds =
-            node_since_epoch.as_secs_f64() - server_since_epoch.as_secs_f64();
+            Some(node_since_epoch.as_secs_f64() - server_since_epoch.as_secs_f64());
     }
 }
 

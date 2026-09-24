@@ -623,8 +623,9 @@ En node, der er ved at blive dårligere, skal være synlig som netop det og ikke
 som en station, der pludselig blev tavs. Agenten læser oppetid, belastning og
 processortemperatur fra procfs og sysfs og beregner sin urafvigelse af de
 servertidsstempler, registreringen og hver kvittering bærer. Alle aflæsninger
-er valgfrie: en manglende fil på en udviklingsmaskine rapporterer nul frem for
-at få kørslen til at fejle.
+er valgfrie i protokollen: en manglende fil på en udviklingsmaskine sendes som
+fravær, og urafvigelsen udelades, indtil noden har set serverens ur. Serveren
+gemmer fravær som `NULL`, og panelet viser det som ukendt, aldrig som nul.
 
 
 ### Live-inspektion

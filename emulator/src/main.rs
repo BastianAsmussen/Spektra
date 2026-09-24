@@ -184,12 +184,12 @@ fn health(signal: Signal, age_seconds: i64) -> HealthReport {
                 .unwrap_or_else(SystemTime::now)
                 .into(),
         ),
-        uptime_seconds: 86_400.0 + seconds(age_seconds),
-        load_1m: strain.mul_add(0.12, 0.35),
-        load_5m: strain.mul_add(0.09, 0.31),
-        load_15m: strain.mul_add(0.05, 0.24),
-        cpu_temperature_celsius: strain.mul_add(3.1, 44.5),
-        clock_offset_seconds: strain.mul_add(0.02, 0.05),
+        uptime_seconds: Some(86_400.0 + seconds(age_seconds)),
+        load_1m: Some(strain.mul_add(0.12, 0.35)),
+        load_5m: Some(strain.mul_add(0.09, 0.31)),
+        load_15m: Some(strain.mul_add(0.05, 0.24)),
+        cpu_temperature_celsius: Some(strain.mul_add(3.1, 44.5)),
+        clock_offset_seconds: Some(strain.mul_add(0.02, 0.05)),
     }
 }
 

@@ -118,12 +118,12 @@ diesel::table! {
         id -> Int8,
         node_id -> Int8,
         measured_at -> Timestamp,
-        uptime_seconds -> Float8,
-        load_1m -> Float8,
-        load_5m -> Float8,
-        load_15m -> Float8,
-        cpu_temperature_celsius -> Float8,
-        clock_offset_seconds -> Float8,
+        uptime_seconds -> Nullable<Float8>,
+        load_1m -> Nullable<Float8>,
+        load_5m -> Nullable<Float8>,
+        load_15m -> Nullable<Float8>,
+        cpu_temperature_celsius -> Nullable<Float8>,
+        clock_offset_seconds -> Nullable<Float8>,
         created_at -> Timestamp,
     }
 }

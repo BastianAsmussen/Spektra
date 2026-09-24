@@ -9,29 +9,26 @@ const MILLIDEGREES: f64 = 1_000.0;
 /// One reading of the node's own operational state.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Health {
-    pub uptime_seconds: f64,
-    pub load_1m: f64,
-    pub load_5m: f64,
-    pub load_15m: f64,
-    pub cpu_temperature_celsius: f64,
+    pub uptime_seconds: Option<f64>,
+    pub load_1m: Option<f64>,
+    pub load_5m: Option<f64>,
+    pub load_15m: Option<f64>,
+    pub cpu_temperature_celsius: Option<f64>,
 }
 
 impl Health {
-    /// Read the current state from the running kernel. Missing fields read as zero.
+    /// Read the current state from the running kernel. A reading the kernel does not offer is `None`.
     #[must_use]
     pub fn read() -> Self {
+        let load = load_average(Path::new(LOADAVG_PATH));
+
         Self {
-            uptime_seconds: uptime(Path::new(UPTIME_PATH)).unwrap_or_default(),
-            ..load_average(Path::new(LOADAVG_PATH)).unwrap_or_default()
+            uptime_seconds: uptime(Path::new(UPTIME_PATH)),
+            load_1m: load.map(|[one, _, _]| one),
+            load_5m: load.map(|[_, five, _]| five),
+            load_15m: load.map(|[_, _, fifteen]| fifteen),
+            cpu_temperature_celsius: temperature(Path::new(THERMAL_ZONES)),
         }
-        .with_temperature(temperature(Path::new(THERMAL_ZONES)).unwrap_or_default())
-    }
-
-    #[must_use]
-    const fn with_temperature(mut self, celsius: f64) -> Self {
-        self.cpu_temperature_celsius = celsius;
-
-        self
     }
 }
 
@@ -44,16 +41,15 @@ fn uptime(path: &Path) -> Option<f64> {
         .ok()
 }
 
-fn load_average(path: &Path) -> Option<Health> {
+fn load_average(path: &Path) -> Option<[f64; 3]> {
     let raw = fs::read_to_string(path).ok()?;
     let mut fields = raw.split_whitespace();
 
-    Some(Health {
-        load_1m: fields.next()?.parse().ok()?,
-        load_5m: fields.next()?.parse().ok()?,
-        load_15m: fields.next()?.parse().ok()?,
-        ..Health::default()
-    })
+    Some([
+        fields.next()?.parse().ok()?,
+        fields.next()?.parse().ok()?,
+        fields.next()?.parse().ok()?,
+    ])
 }
 
 fn temperature(root: &Path) -> Option<f64> {
@@ -110,11 +106,11 @@ mod tests {
         let path = dir.join("loadavg");
         fs::write(&path, "0.42 0.31 0.20 1/234 5678\n").expect("writable");
 
-        let health = load_average(&path).expect("the file parses");
+        let [one, five, fifteen] = load_average(&path).expect("the file parses");
 
-        assert!((health.load_1m - 0.42).abs() < f64::EPSILON);
-        assert!((health.load_5m - 0.31).abs() < f64::EPSILON);
-        assert!((health.load_15m - 0.20).abs() < f64::EPSILON);
+        assert!((one - 0.42).abs() < f64::EPSILON);
+        assert!((five - 0.31).abs() < f64::EPSILON);
+        assert!((fifteen - 0.20).abs() < f64::EPSILON);
 
         fs::remove_dir_all(&dir).ok();
     }

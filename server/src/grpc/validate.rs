@@ -145,30 +145,32 @@ pub fn health(report: &HealthReport) -> Result<(), Status> {
     if report.measured_at.is_none() {
         return Err(Status::invalid_argument("measured_at is required"));
     }
-    if !report.uptime_seconds.is_finite() || report.uptime_seconds < 0.0 {
-        return Err(Status::invalid_argument(
-            "uptime_seconds must be finite and non-negative",
-        ));
-    }
-    for (name, load) in [
+    for (name, value) in [
+        ("uptime_seconds", report.uptime_seconds),
         ("load_1m", report.load_1m),
         ("load_5m", report.load_5m),
         ("load_15m", report.load_15m),
     ] {
-        if !load.is_finite() || load < 0.0 {
+        if value.is_some_and(|value| !value.is_finite() || value < 0.0) {
             return Err(Status::invalid_argument(format!(
                 "{name} must be finite and non-negative"
             )));
         }
     }
-    if !TEMPERATURE_RANGE.contains(&report.cpu_temperature_celsius) {
+    if report
+        .cpu_temperature_celsius
+        .is_some_and(|celsius| !TEMPERATURE_RANGE.contains(&celsius))
+    {
         return Err(Status::invalid_argument(format!(
             "cpu_temperature_celsius must be within {} to {}",
             TEMPERATURE_RANGE.start(),
             TEMPERATURE_RANGE.end()
         )));
     }
-    if !CLOCK_OFFSET_RANGE.contains(&report.clock_offset_seconds) {
+    if report
+        .clock_offset_seconds
+        .is_some_and(|offset| !CLOCK_OFFSET_RANGE.contains(&offset))
+    {
         return Err(Status::invalid_argument(format!(
             "clock_offset_seconds must be within {} to {}",
             CLOCK_OFFSET_RANGE.start(),
