@@ -400,7 +400,7 @@ pub async fn panel(
         })
         .await??;
 
-    let health: Option<(NaiveDateTime, f64, f64, f64, f64, f64, f64)> = conn
+    let health: Option<HealthRow> = conn
         .interact(move |conn| {
             health_schema::table
                 .filter(health_schema::node_id.eq(node_id))
@@ -442,7 +442,7 @@ pub async fn panel(
         health: health.map(
             |(measured_at, uptime, one, five, fifteen, temperature, clock)| HealthView {
                 measured_at: stamp(measured_at),
-                uptime: uptime_words(uptime),
+                uptime: uptime.map_or_else(|| "ukendt".to_owned(), uptime_words),
                 meters: meters(&Sample {
                     load: [one, five, fifteen],
                     temperature,
@@ -623,10 +623,20 @@ fn uptime_words(seconds: f64) -> String {
     parts.join(" ")
 }
 
+type HealthRow = (
+    NaiveDateTime,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+);
+
 struct Sample {
-    load: [f64; 3],
-    temperature: f64,
-    clock: f64,
+    load: [Option<f64>; 3],
+    temperature: Option<f64>,
+    clock: Option<f64>,
 }
 
 fn meters(sample: &Sample) -> Vec<Meter> {
@@ -635,34 +645,45 @@ fn meters(sample: &Sample) -> Vec<Meter> {
         temperature,
         clock,
     } = *sample;
-    let sustained = five.max(fifteen);
+    let sustained = five
+        .zip(fifteen)
+        .map(|(five, fifteen)| (format!("{five:.2} / {fifteen:.2}"), five.max(fifteen)));
 
     vec![
-        Meter {
-            label: "CPU-temperatur",
-            value: format!("{temperature:.1} °C"),
-            percent: fraction(temperature, TEMPERATURE_CEILING),
-            tone: tone(temperature, TEMPERATURE_CEILING),
-        },
-        Meter {
-            label: "Belastning 1m",
-            value: format!("{one:.2}"),
-            percent: fraction(one, LOAD_CEILING),
-            tone: tone(one, LOAD_CEILING),
-        },
-        Meter {
-            label: "Belastning 5m / 15m",
-            value: format!("{five:.2} / {fifteen:.2}"),
-            percent: fraction(sustained, LOAD_CEILING),
-            tone: tone(sustained, LOAD_CEILING),
-        },
-        Meter {
-            label: "Urafvigelse",
-            value: format!("{clock:+.3} s"),
-            percent: fraction(clock.abs(), CLOCK_CEILING_SECONDS),
-            tone: tone(clock.abs(), CLOCK_CEILING_SECONDS),
-        },
+        meter(
+            "CPU-temperatur",
+            temperature.map(|celsius| (format!("{celsius:.1} °C"), celsius)),
+            TEMPERATURE_CEILING,
+        ),
+        meter(
+            "Belastning 1m",
+            one.map(|one| (format!("{one:.2}"), one)),
+            LOAD_CEILING,
+        ),
+        meter("Belastning 5m / 15m", sustained, LOAD_CEILING),
+        meter(
+            "Urafvigelse",
+            clock.map(|clock| (format!("{clock:+.3} s"), clock.abs())),
+            CLOCK_CEILING_SECONDS,
+        ),
     ]
+}
+
+fn meter(label: &'static str, reading: Option<(String, f64)>, ceiling: f64) -> Meter {
+    reading.map_or_else(
+        || Meter {
+            label,
+            value: "ukendt".to_owned(),
+            percent: 0.0,
+            tone: "unknown",
+        },
+        |(value, level)| Meter {
+            label,
+            value,
+            percent: fraction(level, ceiling),
+            tone: tone(level, ceiling),
+        },
+    )
 }
 
 fn fraction(value: f64, ceiling: f64) -> f64 {

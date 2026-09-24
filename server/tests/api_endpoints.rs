@@ -503,12 +503,12 @@ fn valid_health() -> HealthReport {
     HealthReport {
         protocol_version: "1".to_owned(),
         measured_at: Some(std::time::SystemTime::now().into()),
-        uptime_seconds: 3_600.0,
-        load_1m: 0.4,
-        load_5m: 0.3,
-        load_15m: 0.2,
-        cpu_temperature_celsius: 44.5,
-        clock_offset_seconds: 0.05,
+        uptime_seconds: Some(3_600.0),
+        load_1m: Some(0.4),
+        load_5m: Some(0.3),
+        load_15m: Some(0.2),
+        cpu_temperature_celsius: Some(44.5),
+        clock_offset_seconds: Some(0.05),
     }
 }
 
