@@ -3,9 +3,12 @@ set -euo pipefail
 
 image=/radio-node-1.img.zst
 token=/enrollment.env
+wifi=/wifi.conf
 backup=/root/agent-state
+wifi_backup=/root/wifi.conf
 card=/dev/mmcblk0
 state=var/lib/spektra-node-agent
+networks=etc/wpa_supplicant/imperative.conf
 
 die() {
   echo "bootstrap: $*" >&2
@@ -37,7 +40,19 @@ if mount -o ro "${card}p2" "$mnt" 2>/dev/null; then
     saved=true
     echo "bootstrap: saved the node identity to $backup"
   fi
+  if [[ ! -f $wifi && -s $mnt/$networks ]]; then
+    install -m 600 "$mnt/$networks" "$wifi_backup"
+    echo "bootstrap: saved the card's wireless networks to $wifi_backup"
+  fi
   umount "$mnt"
+fi
+
+if [[ -f $wifi ]]; then
+  networks_from=$wifi
+elif [[ -s $wifi_backup ]]; then
+  networks_from=$wifi_backup
+else
+  networks_from=
 fi
 
 if ! $saved && [[ -f $backup/identity.json ]]; then
@@ -68,6 +83,12 @@ case $restore in
     install -m 600 "$token" "$mnt/$state/"
     ;;
 esac
+if [[ -n $networks_from ]]; then
+  install -D -m 600 "$networks_from" "$mnt/$networks"
+  echo "bootstrap: wireless networks from $networks_from"
+else
+  echo "bootstrap: no wireless networks, the node needs a cable"
+fi
 umount "$mnt"
 sync
 

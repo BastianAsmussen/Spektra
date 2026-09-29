@@ -111,6 +111,7 @@ in
             );
 
             initrd.systemd.tpm2.enable = false;
+            kernelParams = [ "cfg80211.ieee80211_regdom=DK" ];
           };
 
           hardware.raspberry-pi.firmware.uboot.enable = true;
@@ -137,11 +138,14 @@ in
             firewall.allowedTCPPorts = [ 22 ];
             useNetworkd = true;
             useDHCP = false;
-            wireless = lib.mkIf (cfg.wifi.ssid != null) {
-              inherit (cfg.wifi) secretsFile;
-
+            wireless = {
               enable = true;
-              networks.${cfg.wifi.ssid}.pskRaw = "ext:psk";
+              allowAuxiliaryImperativeNetworks = true;
+
+              secretsFile = lib.mkIf (cfg.wifi.ssid != null) cfg.wifi.secretsFile;
+              networks = lib.mkIf (cfg.wifi.ssid != null) {
+                ${cfg.wifi.ssid}.pskRaw = "ext:psk";
+              };
             };
           };
 
@@ -206,10 +210,14 @@ in
             }
           ];
 
-          nix.settings.experimental-features = [
-            "nix-command"
-            "flakes"
-          ];
+          nix.settings = {
+            experimental-features = [
+              "nix-command"
+              "flakes"
+            ];
+
+            trusted-users = [ "maintainer" ];
+          };
 
           system.stateVersion = "25.11";
         };
