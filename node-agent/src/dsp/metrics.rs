@@ -57,7 +57,6 @@ pub fn derive(psd: &Psd, spec: &ChannelSpec, lo_error_hz: f64) -> Vec<MetricSamp
     let in_band_bins = band.len();
     let total_power = psd.power_in(band.clone()).max(FLOOR);
     let noise_power = (floor_per_bin * bins_to_f64(in_band_bins)).max(FLOOR);
-    let signal_power = (total_power - noise_power).max(FLOOR);
 
     let sample = |metric: Metric, value: f64| MetricSample {
         channel_frequency_hz: spec.frequency_hz,
@@ -67,9 +66,10 @@ pub fn derive(psd: &Psd, spec: &ChannelSpec, lo_error_hz: f64) -> Vec<MetricSamp
 
     vec![
         sample(Metric::SignalStrength, 10.0 * total_power.log10()),
+        // (S+N)/N, not S/N: a carrier lost in the noise reads 0 dB instead of going negative.
         sample(
             Metric::SignalToNoise,
-            10.0 * (signal_power / noise_power).log10(),
+            10.0 * (total_power.max(noise_power) / noise_power).log10(),
         ),
         sample(
             Metric::CarrierOffset,
@@ -347,6 +347,27 @@ mod tests {
         assert!(
             quiet > noisy + 20.0,
             "a hundredfold quieter channel should read far better: {quiet} dB against {noisy} dB"
+        );
+    }
+
+    #[test]
+    fn a_channel_of_pure_noise_reads_near_zero_and_inside_the_range() {
+        let snr = value(
+            &derive(
+                &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.0, 0.05)),
+                &spec(),
+                0.0,
+            ),
+            Metric::SignalToNoise,
+        );
+
+        assert!(
+            (0.0..=1.0).contains(&snr),
+            "a channel with no carrier should read close to 0 dB, not {snr} dB"
+        );
+        assert!(
+            protocol::metric_range(Metric::SignalToNoise).is_some_and(|range| range.contains(&snr)),
+            "{snr} dB falls outside the range the server accepts"
         );
     }
 
