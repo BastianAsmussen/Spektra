@@ -10,6 +10,7 @@ EXISTING=0
 JOBS=32
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN="$DIR/../target/release/emulator"
+readonly EMULATOR_DEVICE="RTL-SDR emulator"
 
 usage() {
 	cat >&2 <<-EOF
@@ -19,10 +20,11 @@ usage() {
 		administration API first and enrols against the key that returns. -k is
 		an administrator's session_token, or set SPEKTRA_SESSION.
 
-		-e drives the nodes already in the directory before planning any new
-		ones, so a rerun tops the fleet up to -n instead of doubling it. Each
-		reused node's credential is rotated, which revokes whatever the real
-		receiver at that site holds.
+		-e drives the emulator's own nodes already in the directory, oldest
+		first, before planning any new ones, so a rerun tops the fleet up to -n
+		instead of doubling it. Only nodes registered with the emulator's
+		device ($EMULATOR_DEVICE) are reused, so a real receiver is never
+		taken over. Each reused node's credential is rotated.
 
 		-j sets how many nodes are prepared through the API at once, 32 by
 		default.
@@ -107,8 +109,9 @@ random_identity() {
 
 existing_nodes() {
 	curl -fsS "$API/api/nodes" -H "authorization: Bearer $SESSION" |
-		jq -r --argjson n "$NUM_NODES" '
-			[.[] | select(.suspended | not)][:$n][]
+		jq -r --argjson n "$NUM_NODES" --arg device "$EMULATOR_DEVICE" '
+			[.[] | select((.suspended | not) and .hardware.device == $device)]
+			| sort_by(.id) | .[:$n][]
 			| [.id, (.external_identity // ""), .name,
 			   (.latitude // 57.05), (.longitude // 9.92)]
 			| @tsv'
