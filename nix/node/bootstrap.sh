@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image=/radio-node-1.img.zst
+image=${1:-}
 token=/enrollment.env
 wifi=/wifi.conf
 backup=/root/agent-state
@@ -19,6 +19,7 @@ if ((EUID != 0)); then
   exec sudo -- bash "$0" "$@"
 fi
 
+[[ -n $image ]] || die "usage: $0 <image.img.zst>, one of: $(echo /*.img.zst)"
 [[ -b $card ]] || die "$card not found, insert the SD card"
 [[ -f $image ]] || die "$image not found"
 [[ $(findmnt -no SOURCE /) != "$card"* ]] || die "running from $card, boot from the stick instead"
