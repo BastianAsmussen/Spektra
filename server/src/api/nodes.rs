@@ -3,10 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::Html;
-use axum::{Form, Json, Router, routing::get};
+use axum::{
+    Form, Json, Router,
+    routing::{get, post},
+};
 use chrono::{NaiveDateTime, TimeDelta, Utc};
 use diesel::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 use super::{
     auth::{AuthPage, AuthUser},
@@ -15,6 +19,7 @@ use super::{
 };
 use crate::{
     db::models::enums::{Metric, Modulation},
+    db::models::node_channels::NewNodeChannel,
     db::models::nodes::Node,
     db::schema::{
         channels as channels_schema, measurements as measurements_schema,
@@ -23,8 +28,9 @@ use crate::{
     },
     state::AppState,
     templates::{
-        ChannelView, HealthView, LiveChannel, LivePanel, LiveRenewal, Meter, NodeEditForm,
-        NodePanel, Owner, PanelRights, SpanChoice, stamp, stamp_or_empty,
+        ChannelAssignForm, ChannelChoice, ChannelView, HealthView, LiveChannel, LivePanel,
+        LiveRenewal, Meter, NodeEditForm, NodePanel, Owner, PanelRights, SpanChoice, stamp,
+        stamp_or_empty,
     },
 };
 
@@ -48,8 +54,13 @@ const CLOCK_CEILING_SECONDS: f64 = 2.0;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/nodes", get(list_nodes))
+        .route("/api/nodes/{id}/channels", post(assign_channels))
         .route("/fragments/nodes/{id}", get(node_panel))
         .route("/fragments/nodes/{id}/edit", get(edit_form).post(edit))
+        .route(
+            "/fragments/nodes/{id}/channels",
+            get(channels_form).post(apply_channels),
+        )
         .route(
             "/fragments/nodes/{id}/inspect",
             get(inspect).post(renew).delete(release),
@@ -258,6 +269,211 @@ async fn candidates(
         .collect())
 }
 
+/// The channels one node listens on, by channel id. Also the response.
+#[derive(Debug, Deserialize, Serialize, ToSchema)]
+pub struct ChannelAssignment {
+    pub channel_ids: Vec<i64>,
+}
+
+/// Replace the channels a node listens on.
+///
+/// # Errors
+///
+/// Returns [`ApiError`] for a missing session, a caller who may not assign channels, an
+/// unknown node or an unknown channel.
+#[utoipa::path(
+    post,
+    path = "/api/nodes/{id}/channels",
+    params(("id" = i64, Path, description = "Node id")),
+    request_body = ChannelAssignment,
+    responses(
+        (status = 200, description = "The channels the node listens on after the change", body = ChannelAssignment),
+        (status = 401, description = "Not authenticated", body = ErrorBody),
+        (status = 403, description = "Not an operator or an administrator", body = ErrorBody),
+        (status = 404, description = "No such node", body = ErrorBody),
+        (status = 422, description = "A channel does not exist", body = ErrorBody),
+    ),
+    security(("session_token" = [])),
+    tag = "nodes"
+)]
+pub async fn assign_channels(
+    auth: AuthUser,
+    State(state): State<AppState>,
+    Path(node_id): Path<i64>,
+    Json(request): Json<ChannelAssignment>,
+) -> Result<Json<ChannelAssignment>, ApiError> {
+    let access = visibility::resolve(&state, auth.session.user_id).await?;
+    let wanted = request.channel_ids.into_iter().collect();
+
+    Ok(Json(ChannelAssignment {
+        channel_ids: assign(&state, &access, node_id, wanted).await?,
+    }))
+}
+
+fn require_assign(access: &Access) -> Result<(), ApiError> {
+    if access.may_assign_channels() {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden(
+            "Only an operator or an administrator may assign channels.".into(),
+        ))
+    }
+}
+
+async fn assign(
+    state: &AppState,
+    access: &Access,
+    node_id: i64,
+    wanted: BTreeSet<i64>,
+) -> Result<Vec<i64>, ApiError> {
+    require_assign(access)?;
+
+    let conn = state.pool.get().await?;
+
+    let requested: Vec<i64> = wanted.iter().copied().collect();
+    let known: BTreeSet<i64> = conn
+        .interact(move |conn| {
+            channels_schema::table
+                .filter(channels_schema::id.eq_any(requested))
+                .select(channels_schema::id)
+                .load::<i64>(conn)
+        })
+        .await??
+        .into_iter()
+        .collect();
+
+    let unknown: Vec<String> = wanted.difference(&known).map(i64::to_string).collect();
+    if !unknown.is_empty() {
+        return Err(ApiError::UnprocessableEntity(format!(
+            "No such channel: {}.",
+            unknown.join(", ")
+        )));
+    }
+
+    let wanted: Vec<i64> = wanted.into_iter().collect();
+    let assigned: Vec<i64> = conn
+        .interact(move |conn| {
+            conn.transaction(|conn| {
+                nodes_schema::table
+                    .find(node_id)
+                    .select(nodes_schema::id)
+                    .for_update()
+                    .first::<i64>(conn)?;
+
+                diesel::delete(
+                    node_channels_schema::table
+                        .filter(node_channels_schema::node_id.eq(node_id))
+                        .filter(node_channels_schema::channel_id.ne_all(wanted.clone())),
+                )
+                .execute(conn)?;
+
+                let rows: Vec<NewNodeChannel> = wanted
+                    .iter()
+                    .map(|&channel_id| NewNodeChannel {
+                        node_id,
+                        channel_id,
+                        bandwidth_hz: None,
+                    })
+                    .collect();
+
+                if !rows.is_empty() {
+                    diesel::insert_into(node_channels_schema::table)
+                        .values(&rows)
+                        .on_conflict((
+                            node_channels_schema::node_id,
+                            node_channels_schema::channel_id,
+                        ))
+                        .do_nothing()
+                        .execute(conn)?;
+                }
+
+                node_channels_schema::table
+                    .filter(node_channels_schema::node_id.eq(node_id))
+                    .order(node_channels_schema::channel_id.asc())
+                    .select(node_channels_schema::channel_id)
+                    .load(conn)
+            })
+        })
+        .await??;
+
+    Ok(assigned)
+}
+
+async fn channels_form(
+    auth: AuthPage,
+    State(state): State<AppState>,
+    Path(node_id): Path<i64>,
+) -> Result<Html<String>, ApiError> {
+    let access = visibility::resolve(&state, auth.0.session.user_id).await?;
+    require_assign(&access)?;
+
+    let conn = state.pool.get().await?;
+    let assigned: BTreeSet<i64> = conn
+        .interact(move |conn| {
+            node_channels_schema::table
+                .filter(node_channels_schema::node_id.eq(node_id))
+                .select(node_channels_schema::channel_id)
+                .load::<i64>(conn)
+        })
+        .await??
+        .into_iter()
+        .collect();
+
+    let rows: Vec<(i64, String, i64, Modulation)> = conn
+        .interact(|conn| {
+            channels_schema::table
+                .order(channels_schema::frequency_hz.asc())
+                .select((
+                    channels_schema::id,
+                    channels_schema::name,
+                    channels_schema::frequency_hz,
+                    channels_schema::modulation,
+                ))
+                .load(conn)
+        })
+        .await??;
+
+    let html = ChannelAssignForm {
+        id: node_id,
+        channels: rows
+            .into_iter()
+            .map(|(id, name, frequency_hz, modulation)| ChannelChoice {
+                checked: assigned.contains(&id),
+                id,
+                name,
+                frequency: megahertz(frequency_hz),
+                modulation: modulation.label(),
+            })
+            .collect(),
+    }
+    .render()
+    .map_err(ApiError::internal)?;
+
+    Ok(Html(html))
+}
+
+async fn apply_channels(
+    auth: AuthPage,
+    State(state): State<AppState>,
+    Path(node_id): Path<i64>,
+    Query(span): Query<SpanQuery>,
+    Form(fields): Form<Vec<(String, String)>>,
+) -> Result<Html<String>, ApiError> {
+    let wanted = fields
+        .into_iter()
+        .filter(|(key, _)| key == "channel_id")
+        .map(|(_, value)| value.parse::<i64>())
+        .collect::<Result<BTreeSet<i64>, _>>()
+        .map_err(|err| {
+            ApiError::UnprocessableEntity(format!("A channel id is not a number: {err}."))
+        })?;
+
+    let access = visibility::resolve(&state, auth.0.session.user_id).await?;
+    assign(&state, &access, node_id, wanted).await?;
+
+    Ok(Html(panel(&state, &access, node_id, span).await?))
+}
+
 const SPANS: [(&str, &str, i64); 4] = [
     ("6h", "6t", 6),
     ("24h", "24t", 24),
@@ -427,6 +643,7 @@ pub async fn panel(
     let rights = PanelRights {
         edit: visibility::may_edit_node(state, access, node_id).await?,
         inspect: may_inspect(access, node_id),
+        assign: access.may_assign_channels(),
     };
 
     let now = Utc::now().naive_utc();

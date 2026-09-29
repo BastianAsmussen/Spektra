@@ -14,10 +14,12 @@ use diesel::prelude::*;
 use http_body_util::BodyExt as _;
 use serde_json::{Value, json};
 use server::api::{alarms, nodes, work_orders};
-use server::db::models::enums::{AlarmState, Metric};
+use server::db::models::channels::NewChannel;
+use server::db::models::enums::{AlarmState, Metric, Modulation};
 use server::db::models::nodes::NewNode;
 use server::db::schema::{
-    alarm_events as events_schema, alarms as alarms_schema, nodes as nodes_schema,
+    alarm_events as events_schema, alarms as alarms_schema, channels as channels_schema,
+    node_channels as node_channels_schema, nodes as nodes_schema,
 };
 use server::state::AppState;
 use tower::ServiceExt as _;
@@ -797,4 +799,205 @@ async fn renewing_says_whether_the_node_is_listening() {
         "noden lytter ikke",
         "an unreachable node was reported as measuring"
     );
+}
+
+async fn seed_channel(pool: &Pool, name: &str, frequency_hz: i64) -> i64 {
+    let conn = pool.get().await.expect("seed connection");
+    let name = name.to_owned();
+
+    conn.interact(move |conn| {
+        diesel::insert_into(channels_schema::table)
+            .values(&NewChannel {
+                name,
+                frequency_hz,
+                modulation: Modulation::Fm,
+            })
+            .returning(channels_schema::id)
+            .get_result(conn)
+            .expect("channel insert")
+    })
+    .await
+    .expect("seed interact failed")
+}
+
+async fn assigned_channels(pool: &Pool, node_id: i64) -> Vec<i64> {
+    let conn = pool.get().await.expect("connection");
+
+    conn.interact(move |conn| {
+        node_channels_schema::table
+            .filter(node_channels_schema::node_id.eq(node_id))
+            .order(node_channels_schema::channel_id.asc())
+            .select(node_channels_schema::channel_id)
+            .load(conn)
+    })
+    .await
+    .expect("interact")
+    .expect("assignments")
+}
+
+async fn plan_version(pool: &Pool, node_id: i64) -> i64 {
+    let conn = pool.get().await.expect("connection");
+
+    conn.interact(move |conn| {
+        nodes_schema::table
+            .filter(nodes_schema::id.eq(node_id))
+            .select(nodes_schema::channel_plan_version)
+            .first(conn)
+    })
+    .await
+    .expect("interact")
+    .expect("plan version")
+}
+
+#[tokio::test]
+async fn an_operator_replaces_the_channels_a_node_listens_on() {
+    let pool = test_pool("lifecycle", "assign_replace").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let first = seed_channel(&pool, "DR P3", 93_900_000).await;
+    let second = seed_channel(&pool, "DR P1", 96_500_000).await;
+    let (_, token) = seed_actor(&pool, "operator@spektra.test", OPERATOR).await;
+    let state = AppState::new(pool.clone());
+    let uri = format!("/api/nodes/{node_id}/channels");
+
+    let both = post(
+        &state,
+        &token,
+        &uri,
+        json!({"channel_ids": [second, first]}),
+    )
+    .await;
+
+    assert_eq!(both.status(), StatusCode::OK);
+    assert_eq!(body_json(both).await["channel_ids"], json!([first, second]));
+
+    let one = post(&state, &token, &uri, json!({"channel_ids": [second]})).await;
+
+    assert_eq!(one.status(), StatusCode::OK);
+    assert_eq!(assigned_channels(&pool, node_id).await, vec![second]);
+
+    let none = post(&state, &token, &uri, json!({"channel_ids": []})).await;
+
+    assert_eq!(none.status(), StatusCode::OK);
+    assert!(assigned_channels(&pool, node_id).await.is_empty());
+}
+
+#[tokio::test]
+async fn reassigning_the_same_channels_leaves_the_plan_version_alone() {
+    let pool = test_pool("lifecycle", "assign_version").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let channel = seed_channel(&pool, "Radio4", 102_300_000).await;
+    let (_, token) = seed_actor(&pool, "admin@spektra.test", ADMINISTRATOR).await;
+    let state = AppState::new(pool.clone());
+    let uri = format!("/api/nodes/{node_id}/channels");
+    let before = plan_version(&pool, node_id).await;
+
+    for _ in 0..2 {
+        let response = post(&state, &token, &uri, json!({"channel_ids": [channel]})).await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    assert_eq!(
+        plan_version(&pool, node_id).await,
+        before.checked_add(1).expect("version overflow"),
+        "an unchanged assignment moved the plan version"
+    );
+}
+
+#[tokio::test]
+async fn only_operators_and_administrators_may_assign_channels() {
+    let pool = test_pool("lifecycle", "assign_forbidden").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let channel = seed_channel(&pool, "DR P1", 96_500_000).await;
+    let state = AppState::new(pool.clone());
+    let uri = format!("/api/nodes/{node_id}/channels");
+
+    for (email, role) in [
+        ("reader@spektra.test", READER),
+        ("tech@spektra.test", TECHNICIAN),
+    ] {
+        let (_, token) = seed_actor(&pool, email, role).await;
+        let response = post(&state, &token, &uri, json!({"channel_ids": [channel]})).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{email}");
+    }
+
+    assert!(assigned_channels(&pool, node_id).await.is_empty());
+}
+
+#[tokio::test]
+async fn an_unknown_channel_is_rejected_and_nothing_changes() {
+    let pool = test_pool("lifecycle", "assign_unknown_channel").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let channel = seed_channel(&pool, "DR P3", 93_900_000).await;
+    let (_, token) = seed_actor(&pool, "operator@spektra.test", OPERATOR).await;
+    let state = AppState::new(pool.clone());
+    let unknown = channel.checked_add(1000).expect("id overflow");
+
+    let response = post(
+        &state,
+        &token,
+        &format!("/api/nodes/{node_id}/channels"),
+        json!({"channel_ids": [channel, unknown]}),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(assigned_channels(&pool, node_id).await.is_empty());
+}
+
+#[tokio::test]
+async fn assigning_channels_to_an_unknown_node_is_not_found() {
+    let pool = test_pool("lifecycle", "assign_unknown_node").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let channel = seed_channel(&pool, "DR P3", 93_900_000).await;
+    let (_, token) = seed_actor(&pool, "operator@spektra.test", OPERATOR).await;
+    let state = AppState::new(pool);
+    let missing = node_id.checked_add(1000).expect("id overflow");
+
+    let response = post(
+        &state,
+        &token,
+        &format!("/api/nodes/{missing}/channels"),
+        json!({"channel_ids": [channel]}),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn the_panel_form_assigns_every_ticked_channel() {
+    let pool = test_pool("lifecycle", "assign_form").await;
+    let (node_id, _) = seed_alarm(&pool).await;
+    let first = seed_channel(&pool, "DR P3", 93_900_000).await;
+    let second = seed_channel(&pool, "DR P1", 96_500_000).await;
+    let (_, token) = seed_actor(&pool, "operator@spektra.test", OPERATOR).await;
+    let state = AppState::new(pool.clone());
+
+    let form = get(
+        &state,
+        &token,
+        &format!("/fragments/nodes/{node_id}/channels"),
+    )
+    .await;
+
+    assert_eq!(form.status(), StatusCode::OK);
+
+    let response = app(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/fragments/nodes/{node_id}/channels"))
+                .header("cookie", format!("session_token={token}"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "channel_id={first}&channel_id={second}"
+                )))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(assigned_channels(&pool, node_id).await, vec![first, second]);
 }

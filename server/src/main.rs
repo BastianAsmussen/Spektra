@@ -20,6 +20,7 @@ const INGEST_POOL_SIZE: usize = 8;
     paths(
         health::get_health,
         nodes::list_nodes,
+        nodes::assign_channels,
         alarms::list_alarms,
         alarms::get_alarm,
         alarms::transition_alarm,
@@ -39,6 +40,7 @@ const INGEST_POOL_SIZE: usize = 8;
     ),
     components(schemas(
         server::db::models::nodes::Node,
+        server::api::nodes::ChannelAssignment,
         server::db::models::alarms::Alarm,
         server::db::models::alarm_events::AlarmEvent,
         server::db::models::enums::AlarmState,

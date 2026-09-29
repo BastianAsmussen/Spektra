@@ -1,0 +1,38 @@
+{%- import "fragments/icons.html" as icon -%}
+
+<form class="mt-3 grid gap-4 rounded-md border border-surface0 bg-canvas p-4"
+  hx-post="/fragments/nodes/{{ id }}/channels" hx-target="#node-panel" hx-swap="innerHTML">
+  <h3 class="text-sm font-semibold text-text">Tildel kanaler</h3>
+
+  {% if channels.is_empty() %}
+    <p class="text-sm text-overlay0">Der er ingen kanaler at tildele.</p>
+  {% else %}
+    <div class="grid gap-2 sm:grid-cols-2">
+      {% for channel in channels %}
+        <label class="flex items-center gap-3 rounded-md border border-surface0 bg-mantle px-3 py-2">
+          <input type="checkbox" name="channel_id" value="{{ channel.id }}"
+            {%- if channel.checked %} checked{% endif %} class="h-4 w-4 accent-blue">
+          <span class="min-w-0">
+            <span class="block truncate text-sm text-text">{{ channel.name }}</span>
+            <span class="font-mono text-xs text-overlay0">
+              {{ channel.frequency }} - {{ channel.modulation }}
+            </span>
+          </span>
+        </label>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <div class="flex flex-wrap items-center gap-2">
+    <button type="submit"
+      class="flex items-center gap-1.5 rounded-md bg-blue px-3 py-2 text-sm font-semibold
+        text-canvas transition hover:opacity-90">
+      {% call icon::check("h-4 w-4") %}{% endcall %}Gem
+    </button>
+    <button type="button" hx-on:click="this.closest('#node-channels').replaceChildren()"
+      class="rounded-md border border-surface0 px-3 py-2 text-sm text-subtext0 transition
+        hover:border-red hover:text-red">
+      Annullér
+    </button>
+  </div>
+</form>

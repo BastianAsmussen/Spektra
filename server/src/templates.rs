@@ -184,6 +184,23 @@ pub struct NodeEditForm {
     pub interval_max: i32,
 }
 
+/// One channel in the assignment form, ticked when the node already listens on it.
+pub struct ChannelChoice {
+    pub id: i64,
+    pub name: String,
+    pub frequency: String,
+    pub modulation: &'static str,
+    pub checked: bool,
+}
+
+/// The channel assignment form, opened from the node panel.
+#[derive(Template)]
+#[template(path = "fragments/node_channels.html")]
+pub struct ChannelAssignForm {
+    pub id: i64,
+    pub channels: Vec<ChannelChoice>,
+}
+
 /// A credential, rendered once and never again.
 #[derive(Template)]
 #[template(path = "fragments/credential.html")]
@@ -355,6 +372,7 @@ pub struct NodePanel {
 pub struct PanelRights {
     pub edit: bool,
     pub inspect: bool,
+    pub assign: bool,
 }
 
 /// One metric of one live dwell, already formatted.

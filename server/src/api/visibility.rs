@@ -68,6 +68,12 @@ impl Access {
         self.role == OPERATOR || self.role == ADMINISTRATOR
     }
 
+    /// Whether this user may change which channels a node listens on.
+    #[must_use]
+    pub fn may_assign_channels(&self) -> bool {
+        self.role == OPERATOR || self.role == ADMINISTRATOR
+    }
+
     /// Whether this user may file the field report on one work order.
     #[must_use]
     pub fn may_complete(&self, assignee: i64) -> bool {
@@ -219,6 +225,20 @@ mod tests {
         assert!(access(ADMINISTRATOR).may_dispatch());
         assert!(!access(TECHNICIAN).may_dispatch());
         assert!(!access(READER).may_dispatch());
+    }
+
+    #[test]
+    fn only_operators_and_administrators_assign_channels() {
+        let access = |role: &str| Access {
+            user_id: 1,
+            role: role.to_owned(),
+            visibility: Visibility::Fleet,
+        };
+
+        assert!(access(OPERATOR).may_assign_channels());
+        assert!(access(ADMINISTRATOR).may_assign_channels());
+        assert!(!access(TECHNICIAN).may_assign_channels());
+        assert!(!access(READER).may_assign_channels());
     }
 
     #[test]
