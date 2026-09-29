@@ -60,6 +60,8 @@ const GUARD_OUTER: f64 = 0.95;
 const MINIMUM_GUARD_BINS: usize = 16;
 /// Occupancy threshold as a power ratio (4 = 6 dB).
 const OCCUPANCY_THRESHOLD: f64 = 4.0;
+/// (S+N)/N of 3 dB; below it the noise bins, not the carrier, set the offset.
+const OFFSET_GATE: f64 = 2.0;
 const FLOOR: f64 = 1e-30;
 
 /// What the node was asked to measure on one channel.
@@ -129,22 +131,27 @@ pub fn derive(psd: &Psd, spec: &ChannelSpec, lo_error_hz: f64) -> Vec<MetricSamp
         value,
     };
 
-    vec![
+    // (S+N)/N, not S/N: a carrier lost in the noise reads 0 dB instead of going negative.
+    let ratio = total_power.max(noise_power) / noise_power;
+
+    let mut samples = vec![
         sample(Metric::SignalStrength, 10.0 * total_power.log10()),
-        // (S+N)/N, not S/N: a carrier lost in the noise reads 0 dB instead of going negative.
-        sample(
-            Metric::SignalToNoise,
-            10.0 * (total_power.max(noise_power) / noise_power).log10(),
-        ),
-        sample(
+        sample(Metric::SignalToNoise, 10.0 * ratio.log10()),
+    ];
+
+    if ratio >= OFFSET_GATE {
+        samples.push(sample(
             Metric::CarrierOffset,
             carrier_offset(psd, &band, floor_per_bin) + lo_error_hz,
-        ),
-        sample(
-            Metric::SpectrumOccupancy,
-            occupancy(psd, &band, floor_per_bin),
-        ),
-    ]
+        ));
+    }
+
+    samples.push(sample(
+        Metric::SpectrumOccupancy,
+        occupancy(psd, &band, floor_per_bin),
+    ));
+
+    samples
 }
 
 fn noise_floor(psd: &Psd, spec: &ChannelSpec, half_width_hz: f64) -> Option<f64> {
@@ -603,6 +610,27 @@ mod tests {
         assert!(
             protocol::metric_range(Metric::SignalToNoise).is_some_and(|range| range.contains(&snr)),
             "{snr} dB falls outside the range the server accepts"
+        );
+    }
+
+    #[test]
+    fn a_channel_of_pure_noise_has_no_carrier_offset() {
+        let samples = derive(
+            &spectrum(&signal(FFT_SIZE * 8, 0.0, 0.0, 0.05)),
+            &spec(),
+            0.0,
+        );
+
+        assert!(
+            samples
+                .iter()
+                .all(|sample| sample.metric != Metric::CarrierOffset),
+            "an offset was reported with no carrier to measure it from"
+        );
+        assert!(
+            samples
+                .iter()
+                .any(|sample| sample.metric == Metric::SignalToNoise)
         );
     }
 
