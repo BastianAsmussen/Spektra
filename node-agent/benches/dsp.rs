@@ -3,7 +3,9 @@
     reason = "benchmark setup is not a `#[test]` function, so clippy.toml's in-tests allowances do not reach it"
 )]
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{
+    BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
+};
 use node_agent::dsp::convert::{index_to_f64, narrow};
 use node_agent::dsp::fir::Decimator;
 use node_agent::dsp::fm::Discriminator;
@@ -61,6 +63,7 @@ fn spectrum(fft_size: usize) -> Psd {
 fn welch(c: &mut Criterion) {
     let block = signal(BLOCK, SAMPLE_RATE);
     let mut group = c.benchmark_group("welch");
+    group.sampling_mode(SamplingMode::Flat);
     group.throughput(Throughput::Elements(u64::try_from(BLOCK).unwrap_or(0)));
 
     for fft_size in FFT_SIZES {
@@ -108,6 +111,7 @@ fn fir(c: &mut Criterion) {
     let block = signal(BLOCK, SAMPLE_RATE);
 
     let mut group = c.benchmark_group("fir");
+    group.sampling_mode(SamplingMode::Flat);
     group.throughput(Throughput::Elements(u64::try_from(BLOCK).unwrap_or(0)));
     group.bench_function("decimate_by_10", |bencher| {
         let mut decimator = Decimator::low_pass(100_000.0, SAMPLE_RATE, 10, TAPS);
@@ -126,6 +130,7 @@ fn discriminator(c: &mut Criterion) {
     let baseband = signal(usize::try_from(BASEBAND_RATE).unwrap_or(0), BASEBAND_RATE);
 
     let mut group = c.benchmark_group("fm");
+    group.sampling_mode(SamplingMode::Flat);
     group.throughput(Throughput::Elements(u64::from(BASEBAND_RATE)));
     group.bench_function("discriminate", |bencher| {
         let mut discriminator = Discriminator::new(BASEBAND_RATE);
