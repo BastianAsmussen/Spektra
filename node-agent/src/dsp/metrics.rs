@@ -10,6 +10,51 @@ pub const FM_BANDWIDTH_HZ: u32 = 180_000;
 /// Occupied DAB ensemble bandwidth in Hz.
 pub const DAB_BANDWIDTH_HZ: u32 = 1_536_000;
 
+/// Band III block centres 5A to 13F (ETSI EN 300 401).
+const DAB_BLOCKS_HZ: [u32; 38] = [
+    174_928_000,
+    176_640_000,
+    178_352_000,
+    180_064_000,
+    181_936_000,
+    183_648_000,
+    185_360_000,
+    187_072_000,
+    188_928_000,
+    190_640_000,
+    192_352_000,
+    194_064_000,
+    195_936_000,
+    197_648_000,
+    199_360_000,
+    201_072_000,
+    202_928_000,
+    204_640_000,
+    206_352_000,
+    208_064_000,
+    209_936_000,
+    211_648_000,
+    213_360_000,
+    215_072_000,
+    216_928_000,
+    218_640_000,
+    220_352_000,
+    222_064_000,
+    223_936_000,
+    225_648_000,
+    227_360_000,
+    229_072_000,
+    230_784_000,
+    232_496_000,
+    234_208_000,
+    235_776_000,
+    237_488_000,
+    239_200_000,
+];
+
+/// Clears a block's roll-off past its edge.
+const DAB_SHOULDER_HZ: f64 = 40_000.0;
+
 const GUARD_INNER: f64 = 1.5;
 const GUARD_OUTER: f64 = 0.95;
 const MINIMUM_GUARD_BINS: usize = 16;
@@ -34,11 +79,31 @@ impl ChannelSpec {
             return self.bandwidth_hz;
         }
 
-        match self.modulation {
-            Modulation::Dab => DAB_BANDWIDTH_HZ,
-            Modulation::Fm | Modulation::Unspecified => FM_BANDWIDTH_HZ,
-        }
+        default_bandwidth_hz(self.modulation)
     }
+}
+
+const fn default_bandwidth_hz(modulation: Modulation) -> u32 {
+    match modulation {
+        Modulation::Dab => DAB_BANDWIDTH_HZ,
+        Modulation::Fm | Modulation::Unspecified => FM_BANDWIDTH_HZ,
+    }
+}
+
+/// Whether `sample_rate_hz` covers a whole `modulation` channel plus guard bins for the noise floor.
+#[must_use]
+pub fn measurable(modulation: Modulation, sample_rate_hz: u32) -> bool {
+    let span_hz = GUARD_OUTER * f64::from(sample_rate_hz) / 2.0;
+
+    match modulation {
+        Modulation::Fm => span_hz > f64::from(FM_BANDWIDTH_HZ) / 2.0,
+        Modulation::Dab => span_hz > dab_reach_hz(),
+        Modulation::Unspecified => false,
+    }
+}
+
+fn dab_reach_hz() -> f64 {
+    f64::from(DAB_BANDWIDTH_HZ) / 2.0 + DAB_SHOULDER_HZ
 }
 
 /// Derive every spectrum metric this build supports for one channel.
@@ -50,7 +115,7 @@ pub fn derive(psd: &Psd, spec: &ChannelSpec, lo_error_hz: f64) -> Vec<MetricSamp
         return Vec::new();
     }
 
-    let Some(floor_per_bin) = noise_floor(psd, half_width) else {
+    let Some(floor_per_bin) = noise_floor(psd, spec, half_width) else {
         return Vec::new();
     };
 
@@ -82,13 +147,47 @@ pub fn derive(psd: &Psd, spec: &ChannelSpec, lo_error_hz: f64) -> Vec<MetricSamp
     ]
 }
 
-fn noise_floor(psd: &Psd, half_width_hz: f64) -> Option<f64> {
-    let mut guard = guard_bins(psd, half_width_hz * GUARD_INNER);
-    if guard.len() < MINIMUM_GUARD_BINS {
-        guard = guard_bins(psd, half_width_hz);
-    }
+fn noise_floor(psd: &Psd, spec: &ChannelSpec, half_width_hz: f64) -> Option<f64> {
+    let mut guard = match spec.modulation {
+        Modulation::Dab => dab_gap_bins(psd, spec.frequency_hz, half_width_hz)?,
+        Modulation::Fm | Modulation::Unspecified => {
+            let guard = guard_bins(psd, half_width_hz * GUARD_INNER);
+            if guard.len() < MINIMUM_GUARD_BINS {
+                guard_bins(psd, half_width_hz)
+            } else {
+                guard
+            }
+        }
+    };
 
     median(&mut guard)
+}
+
+/// Neighbouring blocks swamp a plain guard; only the raster gaps are free of them.
+fn dab_gap_bins(psd: &Psd, frequency_hz: u64, half_width_hz: f64) -> Option<Vec<f64>> {
+    let tuned_hz = f64::from(u32::try_from(frequency_hz).ok()?);
+    let outer_hz = span_limit(psd);
+    let reach_hz = dab_reach_hz();
+
+    let blocks: Vec<f64> = DAB_BLOCKS_HZ
+        .iter()
+        .map(|block| f64::from(*block) - tuned_hz)
+        .filter(|offset| offset.abs() < outer_hz + reach_hz)
+        .collect();
+
+    let low = psd.index_at(-outer_hz)..psd.index_at(-half_width_hz);
+    let high = psd.index_at(half_width_hz)..psd.index_at(outer_hz);
+
+    let gap: Vec<f64> = low
+        .chain(high)
+        .filter(|index| {
+            let offset = psd.offset_hz(*index);
+            blocks.iter().all(|block| (offset - block).abs() > reach_hz)
+        })
+        .filter_map(|index| psd.bins().get(index).map(|power| f64::from(*power)))
+        .collect();
+
+    (gap.len() >= MINIMUM_GUARD_BINS).then_some(gap)
 }
 
 fn guard_bins(psd: &Psd, inner_hz: f64) -> Vec<f64> {
@@ -183,6 +282,142 @@ mod tests {
 
     const SAMPLE_RATE: u32 = 2_400_000;
     const FFT_SIZE: usize = 4096;
+
+    #[test]
+    fn both_supported_receivers_can_measure_a_dab_block() {
+        for sample_rate_hz in [2_400_000, 6_000_000] {
+            assert!(measurable(Modulation::Fm, sample_rate_hz));
+            assert!(measurable(Modulation::Dab, sample_rate_hz));
+        }
+    }
+
+    #[test]
+    fn a_rate_too_narrow_for_a_dab_block_leaves_it_out() {
+        assert!(measurable(Modulation::Fm, 1_024_000));
+        assert!(!measurable(Modulation::Dab, 1_024_000));
+        assert!(!measurable(Modulation::Dab, 1_600_000));
+        assert!(!measurable(Modulation::Unspecified, 6_000_000));
+    }
+
+    #[test]
+    fn the_band_iii_raster_is_ordered_and_inside_the_dab_band() {
+        assert!(
+            DAB_BLOCKS_HZ
+                .iter()
+                .all(|block| (174_000_000..=240_000_000).contains(block))
+        );
+        assert!(
+            DAB_BLOCKS_HZ
+                .windows(2)
+                .all(|pair| pair[1].saturating_sub(pair[0]) >= 1_568_000)
+        );
+    }
+
+    /// Mode I carrier spacing, so a block is flat at the test's bin width.
+    const DAB_TONES: usize = 1537;
+    const DAB_TONE_SPACING_HZ: f64 = 1_000.0;
+    const DAB_SNR: f64 = 100.0;
+    /// 13B, between 13A and 13C.
+    const DAB_BLOCK_HZ: u64 = 232_496_000;
+    const DAB_NEIGHBOUR_HZ: f64 = 1_712_000.0;
+
+    /// Tones past Nyquist are dropped, as an anti-alias filter would.
+    fn dab_blocks(sample_rate: u32, blocks: &[(f64, f64)], noise_amplitude: f64) -> Vec<Complex32> {
+        let count = FFT_SIZE.saturating_mul(8);
+        let nyquist_hz = f64::from(sample_rate) / 2.0;
+        let mut noise = Noise(0x9E37_79B9_7F4A_7C15);
+        let mut real = vec![0.0_f64; count];
+        let mut imaginary = vec![0.0_f64; count];
+
+        for &(centre_hz, amplitude) in blocks {
+            for tone in 0..DAB_TONES {
+                let start = std::f64::consts::TAU * (noise.next_uniform() + 0.5);
+                let offset_hz = index_to_f64(tone).mul_add(
+                    DAB_TONE_SPACING_HZ,
+                    centre_hz - f64::from(DAB_BANDWIDTH_HZ) / 2.0,
+                );
+                if offset_hz.abs() >= nyquist_hz {
+                    continue;
+                }
+
+                let step = std::f64::consts::TAU * offset_hz / f64::from(sample_rate);
+                let (step_cos, step_sin) = (step.cos(), step.sin());
+                let (mut cos, mut sin) = (amplitude * start.cos(), amplitude * start.sin());
+
+                for (re, im) in real.iter_mut().zip(imaginary.iter_mut()) {
+                    *re += cos;
+                    *im += sin;
+                    (cos, sin) = (
+                        cos.mul_add(step_cos, -sin * step_sin),
+                        cos.mul_add(step_sin, sin * step_cos),
+                    );
+                }
+            }
+        }
+
+        real.iter()
+            .zip(&imaginary)
+            .map(|(re, im)| {
+                let (real_noise, imaginary_noise) = noise.next_gaussian();
+
+                Complex32::new(
+                    narrow(noise_amplitude.mul_add(real_noise, *re)),
+                    narrow(noise_amplitude.mul_add(imaginary_noise, *im)),
+                )
+            })
+            .collect()
+    }
+
+    fn dab_snr(sample_rate: u32, neighbour_gain_db: Option<f64>) -> f64 {
+        let noise_amplitude = 0.01;
+        let in_band_noise = 2.0 * noise_amplitude * noise_amplitude * f64::from(DAB_BANDWIDTH_HZ)
+            / f64::from(sample_rate);
+        let amplitude = (DAB_SNR * in_band_noise / index_to_f64(DAB_TONES)).sqrt();
+
+        let mut blocks = vec![(0.0, amplitude)];
+        if let Some(gain_db) = neighbour_gain_db {
+            let neighbour = amplitude * 10.0_f64.powf(gain_db / 20.0);
+            blocks.push((-DAB_NEIGHBOUR_HZ, neighbour));
+            blocks.push((DAB_NEIGHBOUR_HZ, neighbour));
+        }
+
+        let samples = dab_blocks(sample_rate, &blocks, noise_amplitude);
+        let mut welch = Welch::new(FFT_SIZE, sample_rate, Window::Hann).expect("a power of two");
+        welch.push(&samples);
+        let psd = welch.finish().expect("segments were pushed");
+
+        let spec = ChannelSpec {
+            frequency_hz: DAB_BLOCK_HZ,
+            modulation: Modulation::Dab,
+            bandwidth_hz: 0,
+        };
+
+        value(&derive(&psd, &spec, 0.0), Metric::SignalToNoise)
+    }
+
+    #[test]
+    fn a_dab_block_reads_the_injected_signal_to_noise_ratio() {
+        let expected = 10.0 * (1.0 + DAB_SNR).log10();
+        let snr = dab_snr(6_000_000, None);
+
+        assert!(
+            (snr - expected).abs() < 1.0,
+            "expected about {expected} dB, read {snr} dB"
+        );
+    }
+
+    #[test]
+    fn neighbouring_dab_blocks_do_not_move_the_floor() {
+        for sample_rate in [6_000_000, 2_400_000] {
+            let alone = dab_snr(sample_rate, None);
+            let flanked = dab_snr(sample_rate, Some(10.0));
+
+            assert!(
+                (alone - flanked).abs() < 0.5,
+                "at {sample_rate} S/s: {alone} dB alone, {flanked} dB between two blocks 10 dB stronger"
+            );
+        }
+    }
 
     struct Noise(u64);
 

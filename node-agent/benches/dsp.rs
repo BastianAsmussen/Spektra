@@ -17,6 +17,7 @@ use num_complex::Complex32;
 use protocol::v1::Modulation;
 
 const SAMPLE_RATE: u32 = 2_400_000;
+const AIRSPY_RATE: u32 = 6_000_000;
 const BASEBAND_RATE: u32 = 240_000;
 const BLOCK: usize = 0x0001_0000;
 const FFT_SIZES: [usize; 2] = [0x2000, 0x8000];
@@ -53,9 +54,9 @@ fn signal(count: usize, sample_rate: u32) -> Vec<Complex32> {
         .collect()
 }
 
-fn spectrum(fft_size: usize) -> Psd {
-    let mut welch = Welch::new(fft_size, SAMPLE_RATE, Window::Hann).expect("a power of two");
-    welch.push(&signal(fft_size.saturating_mul(8), SAMPLE_RATE));
+fn spectrum(fft_size: usize, sample_rate: u32) -> Psd {
+    let mut welch = Welch::new(fft_size, sample_rate, Window::Hann).expect("a power of two");
+    welch.push(&signal(fft_size.saturating_mul(8), sample_rate));
 
     welch.finish().expect("segments were pushed")
 }
@@ -93,7 +94,7 @@ fn metrics(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("metrics");
     for fft_size in FFT_SIZES {
-        let psd = spectrum(fft_size);
+        let psd = spectrum(fft_size, SAMPLE_RATE);
         group.throughput(Throughput::Elements(u64::try_from(fft_size).unwrap_or(0)));
         group.bench_with_input(
             BenchmarkId::from_parameter(fft_size),
@@ -102,6 +103,31 @@ fn metrics(c: &mut Criterion) {
                 bencher.iter(|| derive(std::hint::black_box(psd), &spec, 0.0));
             },
         );
+    }
+
+    group.finish();
+}
+
+fn metrics_dab(c: &mut Criterion) {
+    let spec = ChannelSpec {
+        frequency_hz: 232_496_000,
+        modulation: Modulation::Dab,
+        bandwidth_hz: 0,
+    };
+
+    let mut group = c.benchmark_group("metrics_dab");
+    for sample_rate in [SAMPLE_RATE, AIRSPY_RATE] {
+        for fft_size in FFT_SIZES {
+            let psd = spectrum(fft_size, sample_rate);
+            group.throughput(Throughput::Elements(u64::try_from(fft_size).unwrap_or(0)));
+            group.bench_with_input(
+                BenchmarkId::new(sample_rate.to_string(), fft_size),
+                &psd,
+                |bencher, psd| {
+                    bencher.iter(|| derive(std::hint::black_box(psd), &spec, 0.0));
+                },
+            );
+        }
     }
 
     group.finish();
@@ -145,5 +171,5 @@ fn discriminator(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, welch, metrics, fir, discriminator);
+criterion_group!(benches, welch, metrics, metrics_dab, fir, discriminator);
 criterion_main!(benches);

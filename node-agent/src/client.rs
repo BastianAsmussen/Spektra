@@ -15,6 +15,7 @@ use tonic::{Request, Status};
 
 use crate::config::Config;
 use crate::dsp::DERIVED_METRICS;
+use crate::dsp::metrics::measurable;
 use crate::health::Health;
 use crate::identity::{self, Identity, IdentityError};
 
@@ -192,7 +193,11 @@ impl Client {
             }),
             capabilities: Some(Capabilities {
                 metrics: DERIVED_METRICS.iter().copied().map(i32::from).collect(),
-                modulations: vec![i32::from(Modulation::Fm)],
+                modulations: [Modulation::Fm, Modulation::Dab]
+                    .into_iter()
+                    .filter(|modulation| measurable(*modulation, config.device.sample_rate_hz))
+                    .map(i32::from)
+                    .collect(),
             }),
         };
 
