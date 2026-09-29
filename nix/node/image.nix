@@ -16,6 +16,7 @@ let
           };
 
           boot.supportedFilesystems.zfs = lib.mkForce false;
+          hardware.enableAllHardware = lib.mkForce false;
         }
       ];
     }).config.system.build.sdImage;

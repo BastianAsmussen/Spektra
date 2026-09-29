@@ -1,0 +1,252 @@
+{
+  "version": 1,
+  "system": "aarch64-linux",
+  "virtualisation": "none",
+  "hardware": {
+    "cpu": [
+      {
+        "architecture": "aarch64",
+        "vendor_name": "ARM",
+        "model_name": "Cortex-A76",
+        "features": [
+          "fp",
+          "asimd",
+          "evtstrm",
+          "aes",
+          "pmull",
+          "sha1",
+          "sha2",
+          "crc32",
+          "atomics",
+          "fphp",
+          "asimdhp",
+          "cpuid",
+          "asimdrdm",
+          "lrcpc",
+          "dcpop",
+          "asimddp"
+        ],
+        "bogo": 108,
+        "units": 4,
+        "page_size": 4096,
+        "physical_id": 0,
+        "siblings": 4,
+        "cores": 4
+      }
+    ],
+    "memory": [
+      {
+        "index": 7,
+        "attached_to": 0,
+        "class_list": [
+          "memory"
+        ],
+        "base_class": {
+          "hex": "0101",
+          "name": "Internally Used Class",
+          "value": 257
+        },
+        "sub_class": {
+          "hex": "0002",
+          "name": "Main Memory",
+          "value": 2
+        },
+        "model": "Main Memory",
+        "resources": [
+          {
+            "type": "phys_mem",
+            "range": 8589934592
+          }
+        ]
+      }
+    ],
+    "network_controller": [
+      {
+        "index": 20,
+        "attached_to": 0,
+        "class_list": [
+          "network_controller"
+        ],
+        "base_class": {
+          "hex": "0002",
+          "name": "Network controller",
+          "value": 2
+        },
+        "sub_class": {
+          "hex": "0000",
+          "name": "Ethernet controller",
+          "value": 0
+        },
+        "model": "Ethernet controller",
+        "sysfs_id": "/devices/platform/axi/1000120000.pcie/1f00100000.ethernet",
+        "unix_device_names": [
+          "end0"
+        ],
+        "driver": "macb",
+        "driver_module": "macb",
+        "drivers": [
+          "macb"
+        ],
+        "driver_modules": [
+          "macb"
+        ]
+      },
+      {
+        "index": 21,
+        "attached_to": 0,
+        "class_list": [
+          "network_controller",
+          "wlan_card"
+        ],
+        "base_class": {
+          "hex": "0002",
+          "name": "Network controller",
+          "value": 2
+        },
+        "sub_class": {
+          "hex": "0082",
+          "name": "WLAN controller",
+          "value": 130
+        },
+        "model": "WLAN controller",
+        "sysfs_id": "/devices/platform/axi/1001100000.mmc/mmc_host/mmc1/mmc1:0001/mmc1:0001:1",
+        "unix_device_names": [
+          "wlan0"
+        ],
+        "driver": "brcmfmac",
+        "driver_module": "brcmfmac",
+        "drivers": [
+          "brcmfmac"
+        ],
+        "driver_modules": [
+          "brcmfmac"
+        ]
+      }
+    ],
+    "network_interface": [
+      {
+        "index": 30,
+        "attached_to": 0,
+        "class_list": [
+          "network_interface"
+        ],
+        "base_class": {
+          "hex": "0107",
+          "name": "Network Interface",
+          "value": 263
+        },
+        "sub_class": {
+          "hex": "0000",
+          "name": "Loopback",
+          "value": 0
+        },
+        "model": "Loopback network interface",
+        "sysfs_id": "/class/net/lo",
+        "unix_device_names": [
+          "lo"
+        ]
+      },
+      {
+        "index": 31,
+        "attached_to": 20,
+        "class_list": [
+          "network_interface"
+        ],
+        "base_class": {
+          "hex": "0107",
+          "name": "Network Interface",
+          "value": 263
+        },
+        "sub_class": {
+          "hex": "0001",
+          "name": "Ethernet",
+          "value": 1
+        },
+        "model": "Ethernet network interface",
+        "sysfs_id": "/class/net/end0",
+        "unix_device_names": [
+          "end0"
+        ],
+        "driver": "macb",
+        "driver_module": "macb",
+        "drivers": [
+          "macb"
+        ],
+        "driver_modules": [
+          "macb"
+        ]
+      },
+      {
+        "index": 32,
+        "attached_to": 21,
+        "class_list": [
+          "network_interface"
+        ],
+        "base_class": {
+          "hex": "0107",
+          "name": "Network Interface",
+          "value": 263
+        },
+        "sub_class": {
+          "hex": "000a",
+          "name": "WLAN",
+          "value": 10
+        },
+        "model": "WLAN network interface",
+        "sysfs_id": "/class/net/wlan0",
+        "unix_device_names": [
+          "wlan0"
+        ],
+        "driver": "brcmfmac",
+        "driver_module": "brcmfmac",
+        "drivers": [
+          "brcmfmac"
+        ],
+        "driver_modules": [
+          "brcmfmac"
+        ]
+      }
+    ],
+    "disk": [
+      {
+        "index": 40,
+        "attached_to": 0,
+        "class_list": [
+          "disk",
+          "block_device"
+        ],
+        "base_class": {
+          "hex": "0106",
+          "name": "Mass Storage Device",
+          "value": 262
+        },
+        "sub_class": {
+          "hex": "0000",
+          "name": "Disk",
+          "value": 0
+        },
+        "model": "Disk",
+        "sysfs_id": "/class/block/mmcblk0",
+        "unix_device_names": [
+          "/dev/mmcblk0"
+        ],
+        "resources": [
+          {
+            "type": "size",
+            "unit": "sectors",
+            "value_1": 62333952,
+            "value_2": 512
+          }
+        ],
+        "driver": "mmcblk",
+        "driver_module": "mmc_block",
+        "drivers": [
+          "mmcblk"
+        ],
+        "driver_modules": [
+          "mmc_block"
+        ]
+      }
+    ]
+  }
+}

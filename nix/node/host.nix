@@ -34,6 +34,7 @@ let
         {
           radio-node = {
             inherit hostName;
+
             sshKeys = adminKeys;
           };
 
@@ -43,164 +44,175 @@ let
     };
 in
 {
-  flake.nixosConfigurations = lib.mapAttrs mkNode nodes;
+  flake = {
+    nixosConfigurations = lib.mapAttrs mkNode nodes;
+    nixosModules.hostRadioNode =
+      {
+        config,
+        lib,
+        ...
+      }:
+      let
+        cfg = config.radio-node;
 
-  flake.nixosModules.hostRadioNode =
-    {
-      config,
-      lib,
-      pkgs,
-      ...
-    }:
-    let
-      cfg = config.radio-node;
+        inherit (lib) mkOption types mkDefault;
+      in
+      {
+        imports = [
+          self.nixosModules.hardwareRadioNode
+          self.nixosModules.nodeAgent
+        ];
 
-      inherit (lib) mkOption types;
-    in
-    {
-      imports = [
-        self.nixosModules.hardwareRadioNode
-        self.nixosModules.nodeAgent
-      ];
-
-      options.radio-node = {
-        hostName = mkOption {
-          type = types.str;
-          default = "radio-node";
-          description = "Host name, and the name the agent registers under.";
-        };
-
-        server = mkOption {
-          type = types.str;
-          default = "https://spektra.asmussen.tech";
-          example = "http://spektra:50051";
-          description = "gRPC endpoint the agent reports to.";
-        };
-
-        sshKeys = mkOption {
-          type = types.listOf types.str;
-          default = [ ];
-          description = "Authorized keys for the maintenance user.";
-        };
-
-        wifi = {
-          ssid = mkOption {
-            type = types.nullOr types.str;
-            default = null;
-            description = "Wireless network to fall back to when no cable is present.";
+        options.radio-node = {
+          hostName = mkOption {
+            type = types.str;
+            default = "radio-node";
+            description = "Host name, and the name the agent registers under.";
           };
 
-          secretsFile = mkOption {
-            type = types.nullOr types.str;
-            default = "/var/lib/wpa_supplicant/secrets";
-            description = "File holding `psk=<64 hex digits>`, read outside the store.";
+          server = mkOption {
+            type = types.str;
+            default = "https://spektra.asmussen.tech";
+            example = "http://spektra:50051";
+            description = "gRPC endpoint the agent reports to.";
+          };
+
+          sshKeys = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Authorized keys for the maintenance user.";
+          };
+
+          wifi = {
+            ssid = mkOption {
+              type = types.nullOr types.str;
+              default = null;
+              description = "Wireless network to fall back to when no cable is present.";
+            };
+
+            secretsFile = mkOption {
+              type = types.nullOr types.str;
+              default = "/var/lib/wpa_supplicant/secrets";
+              description = "File holding `psk=<64 hex digits>`, read outside the store.";
+            };
           };
         };
-      };
 
-      config = {
-        boot.kernelPackages = pkgs.linuxPackages_latest;
+        config = {
+          boot = {
+            kernelPackages = withSystem "x86_64-linux" (
+              { pkgs, ... }:
+              let
+                cross = pkgs.pkgsCross.aarch64-multiplatform;
+              in
+              cross.linuxPackagesFor (
+                cross.callPackage "${inputs.nixos-hardware}/raspberry-pi/common/kernel.nix" { rpiVersion = 5; }
+              )
+            );
 
-        hardware.raspberry-pi.firmware.uboot.enable = true;
-
-        fileSystems = {
-          "/" = {
-            device = lib.mkDefault "/dev/disk/by-label/NIXOS_SD";
-            fsType = lib.mkDefault "ext4";
+            initrd.systemd.tpm2.enable = false;
           };
 
-          "/boot/firmware" = {
-            device = lib.mkDefault "/dev/disk/by-label/FIRMWARE";
-            fsType = lib.mkDefault "vfat";
-            options = lib.mkDefault [
-              "nofail"
-              "noauto"
+          hardware.raspberry-pi.firmware.uboot.enable = true;
+
+          fileSystems = {
+            "/" = {
+              device = mkDefault "/dev/disk/by-label/NIXOS_SD";
+              fsType = mkDefault "ext4";
+            };
+
+            "/boot/firmware" = {
+              device = mkDefault "/dev/disk/by-label/FIRMWARE";
+              fsType = mkDefault "vfat";
+              options = mkDefault [
+                "nofail"
+                "noauto"
+              ];
+            };
+          };
+
+          networking = {
+            inherit (cfg) hostName;
+
+            firewall.allowedTCPPorts = [ 22 ];
+            useNetworkd = true;
+            useDHCP = false;
+            wireless = lib.mkIf (cfg.wifi.ssid != null) {
+              inherit (cfg.wifi) secretsFile;
+
+              enable = true;
+              networks.${cfg.wifi.ssid}.pskRaw = "ext:psk";
+            };
+          };
+
+          systemd.network = {
+            wait-online.anyInterface = true;
+            networks = {
+              "10-wired" = {
+                matchConfig.Type = "ether";
+                networkConfig.DHCP = "yes";
+                dhcpV4Config.RouteMetric = 10;
+                ipv6AcceptRAConfig.RouteMetric = 10;
+              };
+
+              "20-wireless" = {
+                matchConfig.Type = "wlan";
+                networkConfig.DHCP = "yes";
+                dhcpV4Config.RouteMetric = 600;
+                ipv6AcceptRAConfig.RouteMetric = 600;
+              };
+            };
+          };
+
+          zramSwap.enable = mkDefault true;
+          services = {
+            spektra-node-agent = {
+              inherit (cfg) server;
+
+              enable = true;
+              package = withSystem "x86_64-linux" ({ config, ... }: config.packages.node-agent-aarch64);
+            };
+
+            openssh = {
+              enable = true;
+              settings = {
+                PasswordAuthentication = false;
+                PermitRootLogin = "no";
+              };
+            };
+
+            journald.extraConfig = "Storage=volatile";
+          };
+
+          users.users.maintainer = {
+            isNormalUser = true;
+            extraGroups = [
+              "wheel"
+              "plugdev"
             ];
-          };
-        };
 
-        networking = {
-          hostName = cfg.hostName;
-          firewall.allowedTCPPorts = [ 22 ];
-          useNetworkd = true;
-          useDHCP = false;
-
-          wireless = lib.mkIf (cfg.wifi.ssid != null) {
-            enable = true;
-
-            inherit (cfg.wifi) secretsFile;
-            networks.${cfg.wifi.ssid}.pskRaw = "ext:psk";
-          };
-        };
-
-        systemd.network = {
-          wait-online.anyInterface = true;
-
-          networks = {
-            "10-wired" = {
-              matchConfig.Type = "ether";
-              networkConfig.DHCP = "yes";
-              dhcpV4Config.RouteMetric = 10;
-              ipv6AcceptRAConfig.RouteMetric = 10;
-            };
-
-            "20-wireless" = {
-              matchConfig.Type = "wlan";
-              networkConfig.DHCP = "yes";
-              dhcpV4Config.RouteMetric = 600;
-              ipv6AcceptRAConfig.RouteMetric = 600;
-            };
-          };
-        };
-
-        zramSwap.enable = lib.mkDefault true;
-        services = {
-          spektra-node-agent = {
-            inherit (cfg) server;
-
-            enable = true;
-            package = withSystem "x86_64-linux" ({ config, ... }: config.packages.node-agent-aarch64);
+            openssh.authorizedKeys.keys = cfg.sshKeys;
           };
 
-          openssh = {
-            enable = true;
-            settings = {
-              PasswordAuthentication = false;
-              PermitRootLogin = "no";
-            };
-          };
-
-          journald.extraConfig = "Storage=volatile";
-        };
-
-        users.users.maintainer = {
-          isNormalUser = true;
-          extraGroups = [
-            "wheel"
-            "plugdev"
+          security.sudo.extraRules = [
+            {
+              users = [ "maintainer" ];
+              commands = [
+                {
+                  command = "ALL";
+                  options = [ "NOPASSWD" ];
+                }
+              ];
+            }
           ];
 
-          openssh.authorizedKeys.keys = cfg.sshKeys;
+          nix.settings.experimental-features = [
+            "nix-command"
+            "flakes"
+          ];
+
+          system.stateVersion = "25.11";
         };
-
-        security.sudo.extraRules = [
-          {
-            users = [ "maintainer" ];
-            commands = [
-              {
-                command = "ALL";
-                options = [ "NOPASSWD" ];
-              }
-            ];
-          }
-        ];
-
-        nix.settings.experimental-features = [
-          "nix-command"
-          "flakes"
-        ];
-
-        system.stateVersion = "25.11";
       };
-    };
+  };
 }

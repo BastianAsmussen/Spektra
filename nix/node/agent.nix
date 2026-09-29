@@ -10,7 +10,7 @@
     let
       cfg = config.services.spektra-node-agent;
 
-      inherit (lib) mkOption types;
+      inherit (lib) mkOption types mkIf;
 
       args = [
         "--name"
@@ -139,12 +139,13 @@
         };
       };
 
-      config = lib.mkIf cfg.enable {
+      config = mkIf cfg.enable {
         hardware.rtl-sdr.enable = true;
 
-        services.udev.packages = [ pkgs.airspy ];
-
-        services.chrony.enable = lib.mkDefault true;
+        services = {
+          udev.packages = [ pkgs.airspy ];
+          chrony.enable = lib.mkDefault true;
+        };
 
         users = {
           groups.spektra-node = { };
@@ -155,57 +156,78 @@
           };
         };
 
-        systemd.services.spektra-node-agent = {
-          description = "Spektra node agent: SDR sampling, DSP and reporting";
-          wantedBy = [ "multi-user.target" ];
-          wants = [ "network-online.target" ];
-          after = [ "network-online.target" ];
+        systemd.services = {
+          chrony-wait = {
+            description = "Wait for chrony to synchronise the system clock";
+            requires = [ "chronyd.service" ];
+            after = [ "chronyd.service" ];
+            wants = [ "time-sync.target" ];
+            before = [ "time-sync.target" ];
 
-          environment = {
-            SPEKTRA_SERVER = cfg.server;
-            SPEKTRA_STATE_DIR = "/var/lib/spektra-node-agent";
-            RUST_LOG = cfg.logLevel;
-
-            SOAPY_SDR_PLUGIN_PATH = "${pkgs.soapysdr-with-plugins}/${pkgs.soapysdr-with-plugins.searchPath}";
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              ExecStart = "${lib.getExe' config.services.chrony.package "chronyc"} waitsync 0 0.1 0.0 1";
+              TimeoutStartSec = "infinity";
+            };
           };
 
-          startLimitBurst = 5;
-          startLimitIntervalSec = 300;
-          serviceConfig = {
-            ExecStart = "${lib.getExe cfg.package} ${lib.escapeShellArgs args}";
-            EnvironmentFile = lib.mkIf (cfg.environmentFile != null) [ "-${cfg.environmentFile}" ];
-            Restart = "on-failure";
-            RestartSec = 10;
-            User = "spektra-node";
-            Group = "spektra-node";
-            SupplementaryGroups = [ "plugdev" ];
-
-            StateDirectory = "spektra-node-agent";
-            StateDirectoryMode = "0700";
-
-            LockPersonality = true;
-            MemoryDenyWriteExecute = true;
-            NoNewPrivileges = true;
-            PrivateTmp = true;
-            ProtectControlGroups = true;
-            ProtectHome = true;
-            ProtectHostname = true;
-            ProtectKernelLogs = true;
-            ProtectKernelModules = true;
-            ProtectKernelTunables = true;
-            ProtectSystem = "strict";
-            RemoveIPC = true;
-            RestrictAddressFamilies = [
-              "AF_INET"
-              "AF_INET6"
-              "AF_NETLINK"
-              "AF_UNIX"
+          spektra-node-agent = {
+            description = "Spektra node agent: SDR sampling, DSP and reporting";
+            wantedBy = [ "multi-user.target" ];
+            wants = [ "network-online.target" ];
+            requires = [ "chrony-wait.service" ];
+            after = [
+              "network-online.target"
+              "chrony-wait.service"
             ];
 
-            RestrictNamespaces = true;
-            RestrictSUIDSGID = true;
-            SystemCallArchitectures = "native";
-            UMask = "0077";
+            environment = {
+              SPEKTRA_SERVER = cfg.server;
+              SPEKTRA_STATE_DIR = "/var/lib/spektra-node-agent";
+              RUST_LOG = cfg.logLevel;
+
+              SOAPY_SDR_PLUGIN_PATH = "${pkgs.soapysdr-with-plugins}/${pkgs.soapysdr-with-plugins.searchPath}";
+            };
+
+            startLimitBurst = 5;
+            startLimitIntervalSec = 300;
+            serviceConfig = {
+              ExecStart = "${lib.getExe cfg.package} ${lib.escapeShellArgs args}";
+              EnvironmentFile = mkIf (cfg.environmentFile != null) [ "-${cfg.environmentFile}" ];
+              Restart = "on-failure";
+              RestartSec = 10;
+              User = "spektra-node";
+              Group = "spektra-node";
+              SupplementaryGroups = [ "plugdev" ];
+
+              StateDirectory = "spektra-node-agent";
+              StateDirectoryMode = "0700";
+
+              LockPersonality = true;
+              MemoryDenyWriteExecute = true;
+              NoNewPrivileges = true;
+              PrivateTmp = true;
+              ProtectControlGroups = true;
+              ProtectHome = true;
+              ProtectHostname = true;
+              ProtectKernelLogs = true;
+              ProtectKernelModules = true;
+              ProtectKernelTunables = true;
+              ProtectSystem = "strict";
+              RemoveIPC = true;
+              RestrictAddressFamilies = [
+                "AF_INET"
+                "AF_INET6"
+                "AF_NETLINK"
+                "AF_UNIX"
+              ];
+
+              RestrictNamespaces = true;
+              RestrictSUIDSGID = true;
+              SystemCallArchitectures = "native";
+              UMask = "0077";
+            };
           };
         };
       };
