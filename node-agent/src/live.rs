@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use protocol::v1::{LiveReading, LiveSample};
-use protocol::{MAX_LIVE_SESSION, live_session};
+use protocol::{MAX_LIVE_SESSION, live_session, metric_range};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -179,6 +179,22 @@ async fn deliver(client: &mut Client, session: Option<&mut Session>, dwell: Dwel
         return true;
     }
 
+    let readings: Vec<LiveReading> = dwell
+        .samples
+        .iter()
+        .filter(|sample| {
+            metric_range(sample.metric).is_some_and(|range| range.contains(&sample.value))
+        })
+        .map(|sample| LiveReading {
+            metric: i32::from(sample.metric),
+            value: sample.value,
+        })
+        .collect();
+
+    if readings.is_empty() {
+        return true;
+    }
+
     let sample = LiveSample {
         protocol_version: PROTOCOL_VERSION.to_owned(),
         session_id: session.id,
@@ -186,14 +202,7 @@ async fn deliver(client: &mut Client, session: Option<&mut Session>, dwell: Dwel
         frequency_hz: dwell.channel.frequency_hz,
         modulation: i32::from(dwell.channel.modulation),
         label: dwell.channel.label,
-        readings: dwell
-            .samples
-            .iter()
-            .map(|sample| LiveReading {
-                metric: i32::from(sample.metric),
-                value: sample.value,
-            })
-            .collect(),
+        readings,
     };
 
     match client.submit_live(sample).await {

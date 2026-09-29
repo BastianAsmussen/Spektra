@@ -42,7 +42,7 @@ struct ChannelAccumulator {
 pub struct Aggregator {
     window_start: SystemTime,
     channels: BTreeMap<u64, ChannelAccumulator>,
-    clamped: u64,
+    dropped: u64,
 }
 
 impl Aggregator {
@@ -52,7 +52,7 @@ impl Aggregator {
         Self {
             window_start,
             channels: BTreeMap::new(),
-            clamped: 0,
+            dropped: 0,
         }
     }
 
@@ -68,13 +68,13 @@ impl Aggregator {
         self.channels.is_empty()
     }
 
-    /// How many samples have been clamped since the agent started.
+    /// How many samples have been dropped for lying outside the accepted range since the agent started.
     #[must_use]
-    pub const fn clamped(&self) -> u64 {
-        self.clamped
+    pub const fn dropped(&self) -> u64 {
+        self.dropped
     }
 
-    /// Record one dwell's samples for one channel, clamping to the accepted range.
+    /// Record one dwell's samples for one channel, dropping any outside the accepted range.
     pub fn record(&mut self, channel: &ChannelIdentity, samples: &[MetricSample]) {
         if samples.is_empty() {
             return;
@@ -103,30 +103,27 @@ impl Aggregator {
                 continue;
             }
 
-            let value = match metric_range(sample.metric) {
-                Some(range) => {
-                    let clamped = sample.value.clamp(*range.start(), *range.end());
-                    if (clamped - sample.value).abs() > f64::EPSILON {
-                        self.clamped = self.clamped.saturating_add(1);
-                        tracing::warn!(
-                            metric = ?sample.metric,
-                            frequency_hz = channel.frequency_hz,
-                            measured = sample.value,
-                            reported = clamped,
-                            "a sample sat outside the range the server accepts and was clamped"
-                        );
-                    }
-
-                    clamped
-                }
-                None => continue,
+            let Some(range) = metric_range(sample.metric) else {
+                continue;
             };
+
+            if !range.contains(&sample.value) {
+                self.dropped = self.dropped.saturating_add(1);
+                tracing::warn!(
+                    metric = ?sample.metric,
+                    frequency_hz = channel.frequency_hz,
+                    measured = sample.value,
+                    "a sample sat outside the range the server accepts and was dropped"
+                );
+
+                continue;
+            }
 
             accumulator
                 .metrics
                 .entry(i32::from(sample.metric))
                 .or_default()
-                .push(value);
+                .push(sample.value);
         }
     }
 
@@ -524,13 +521,14 @@ mod tests {
     }
 
     #[test]
-    fn a_sample_outside_the_accepted_range_is_clamped_not_dropped() {
+    fn a_sample_outside_the_accepted_range_is_dropped_not_clamped() {
         let mut aggregator = Aggregator::new(SystemTime::UNIX_EPOCH);
         aggregator.record(
             &identity(),
             &[
                 sample(Metric::SignalToNoise, 95.0),
                 sample(Metric::SignalToNoise, -3.0),
+                sample(Metric::SignalToNoise, 20.0),
                 sample(Metric::SignalStrength, 12.0),
             ],
         );
@@ -538,14 +536,18 @@ mod tests {
         let report = aggregator.finish(window_end()).expect("a report");
         let channel = report.channels.first().expect("one channel");
 
-        for reading in &channel.readings {
-            let stats = reading.stats.as_ref().expect("stats are present");
-            let range = metric_range(Metric::try_from(reading.metric).unwrap_or_default())
-                .expect("a known metric");
+        assert_eq!(
+            channel.readings.len(),
+            1,
+            "only the in-range metric survives"
+        );
+        let reading = channel.readings.first().expect("one reading");
+        assert_eq!(reading.metric, i32::from(Metric::SignalToNoise));
 
-            assert!(stats.min >= *range.start() && stats.max <= *range.end());
-        }
-        assert_eq!(aggregator.clamped(), 3);
+        let stats = reading.stats.as_ref().expect("stats are present");
+        assert_eq!(stats.sample_count, 1);
+        assert!((stats.mean - 20.0).abs() < f64::EPSILON);
+        assert_eq!(aggregator.dropped(), 3);
     }
 
     #[test]
